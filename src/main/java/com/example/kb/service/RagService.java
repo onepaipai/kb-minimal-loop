@@ -5,6 +5,7 @@ import java.util.List;
 
 import com.example.kb.dto.AskRequest;
 import com.example.kb.dto.AskResponse;
+import com.example.kb.dto.ReferenceHit;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
@@ -17,6 +18,7 @@ import dev.langchain4j.store.embedding.EmbeddingMatch;
 import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
+import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 import org.springframework.stereotype.Service;
 
 /**
@@ -49,20 +51,32 @@ public class RagService {
      */
     public AskResponse ask(AskRequest request) {
         Response<Embedding> embeddingResponse = embeddingModel.embed(request.getQuestion());
-        EmbeddingSearchRequest searchRequest = EmbeddingSearchRequest.builder()
+        EmbeddingSearchRequest.EmbeddingSearchRequestBuilder searchRequestBuilder = EmbeddingSearchRequest.builder()
                 .queryEmbedding(embeddingResponse.content())
                 .maxResults(MAX_RESULTS)
-                .minScore(MIN_SCORE)
-                .build();
-        EmbeddingSearchResult<TextSegment> searchResult = embeddingStore.search(searchRequest);
+                .minScore(MIN_SCORE);
+        // 指定了文档范围时，只在对应 source 的块内检索
+        if (request.getSources() != null && !request.getSources().isEmpty()) {
+            searchRequestBuilder.filter(MetadataFilterBuilder.metadataKey("source")
+                    .isIn(request.getSources().toArray(new String[0])));
+        }
+        EmbeddingSearchResult<TextSegment> searchResult = embeddingStore.search(searchRequestBuilder.build());
         List<EmbeddingMatch<TextSegment>> matches = searchResult.matches();
 
         List<String> sources = new ArrayList<>();
+        List<ReferenceHit> hits = new ArrayList<>();
         StringBuilder contextBuilder = new StringBuilder();
         for (int i = 0; i < matches.size(); i++) {
             TextSegment segment = matches.get(i).embedded();
+            String source = segment.metadata().getString("source");
             contextBuilder.append("[").append(i + 1).append("] ").append(segment.text()).append("\n\n");
-            sources.add(segment.metadata().getString("source"));
+            sources.add(source);
+            ReferenceHit hit = new ReferenceHit();
+            hit.setIndex(i + 1);
+            hit.setScore(matches.get(i).score());
+            hit.setSource(source);
+            hit.setText(segment.text());
+            hits.add(hit);
         }
         String prompt = "资料：\n" + contextBuilder + "问题：" + request.getQuestion();
 
@@ -72,6 +86,7 @@ public class RagService {
         AskResponse response = new AskResponse();
         response.setAnswer(answer);
         response.setSources(sources);
+        response.setHits(hits);
         return response;
     }
 }

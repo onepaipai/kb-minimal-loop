@@ -86,7 +86,37 @@ curl -X POST http://localhost:8080/api/ask -H "Content-Type: application/json" -
 {"answer":"……[1]","sources":["请假制度.txt"]}
 ```
 
-`sources` 第 i 个元素对应回答中的 `[i]` 引用编号。
+`sources` 第 i 个元素对应回答中的 `[i]` 引用编号；`hits` 同时给出每条引用的相关度分数（0~1）与命中的原文块，便于调整 `minScore`。入参可选 `sources` 数组，只在指定文档内检索：
+
+```bash
+curl -X POST http://localhost:8080/api/ask -H "Content-Type: application/json" -d '{"question":"高铁能报多少钱？","sources":["报销制度.txt"]}'
+```
+
+### GET /api/documents —— 已入库文档清单
+
+```bash
+curl http://localhost:8080/api/documents
+```
+
+返回：
+
+```json
+{"documents":[{"source":"请假制度.txt","chunks":1},{"source":"报销制度.txt","chunks":1}]}
+```
+
+### DELETE /api/document?source=xxx —— 删除指定文档
+
+```bash
+curl -X DELETE "http://localhost:8080/api/document?source=报销制度.txt"
+```
+
+返回：
+
+```json
+{"source":"报销制度.txt","deleted":true}
+```
+
+注意：重复上传同一文件会追加重复块，本实现不做自动去重；更新文档内容前请先删除旧文档再重新上传。
 
 ## 验收清单
 

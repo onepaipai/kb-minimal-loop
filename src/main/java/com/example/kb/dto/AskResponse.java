@@ -9,6 +9,7 @@ public class AskResponse {
 
     private String answer;
     private List<String> sources;
+    private List<ReferenceHit> hits;
 
     public String getAnswer() {
         return answer;
@@ -24,5 +25,13 @@ public class AskResponse {
 
     public void setSources(List<String> sources) {
         this.sources = sources;
+    }
+
+    public List<ReferenceHit> getHits() {
+        return hits;
+    }
+
+    public void setHits(List<ReferenceHit> hits) {
+        this.hits = hits;
     }
 }
