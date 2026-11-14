@@ -65,6 +65,10 @@
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <!-- 仓库内同时保留旧版 com.charles.kb 与新版 com.example.kb，固定以新版为启动入口 -->
+                    <mainClass>com.example.kb.KbApplication</mainClass>
+                </configuration>
             </plugin>
         </plugins>
     </build>
