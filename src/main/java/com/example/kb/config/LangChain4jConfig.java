@@ -18,6 +18,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import javax.sql.DataSource;
+
 /**
  * LangChain4j 统一配置：仅 4 个 Bean（聊天模型、向量模型、切块器、向量库）。
  */
@@ -44,15 +46,8 @@ public class LangChain4jConfig {
     @Value("${langchain4j.dashscope.model-name}")
     private String dashscopeModelName;
 
-    /** 数据库连接配置，与 spring.datasource 复用同一组环境变量 */
-    @Value("${spring.datasource.url}")
-    private String dbUrl;
-
-    @Value("${spring.datasource.username}")
-    private String dbUser;
-
-    @Value("${spring.datasource.password}")
-    private String dbPassword;
+    /** 数据库连接：直接复用 Spring Boot 按 spring.datasource.* 建好的 DataSource，
+     * 这样 DB_URL 里的 ?sslmode=require 等参数不会被手写解析丢掉（Neon 直连要求 SSL）。 */
 
     /**
      * 聊天模型：走 DeepSeek 的 OpenAI 兼容接口。
@@ -92,35 +87,14 @@ public class LangChain4jConfig {
      * 1024 维必须与向量模型 dimensions、schema.sql 中 vector(1024) 三处保持一致。
      */
     @Bean
-    public EmbeddingStore<TextSegment> embeddingStore() {
-        // 解析形如 jdbc:postgresql://host:port/dbname?params 的直连地址
-        String rest = dbUrl.substring("jdbc:postgresql://".length());
-        int slashIndex = rest.indexOf('/');
-        String hostPort = rest.substring(0, slashIndex);
-        String dbAndParams = rest.substring(slashIndex + 1);
-        String host = hostPort;
-        int port = 5432;
-        int colonIndex = hostPort.indexOf(':');
-        if (colonIndex >= 0) {
-            host = hostPort.substring(0, colonIndex);
-            port = Integer.parseInt(hostPort.substring(colonIndex + 1));
-        }
-        String database = dbAndParams;
-        int paramIndex = dbAndParams.indexOf('?');
-        if (paramIndex >= 0) {
-            database = dbAndParams.substring(0, paramIndex);
-        }
+    public EmbeddingStore<TextSegment> embeddingStore(DataSource dataSource) {
         // COMBINED_JSONB 模式必须显式给出 JSONB 列定义，列名与 schema.sql 保持一致
         MetadataStorageConfig metadataConfig = DefaultMetadataStorageConfig.builder()
                 .storageMode(MetadataStorageMode.COMBINED_JSONB)
                 .columnDefinitions(List.of("metadata JSONB NULL"))
                 .build();
-        return PgVectorEmbeddingStore.builder()
-                .host(host)
-                .port(port)
-                .database(database)
-                .user(dbUser)
-                .password(dbPassword)
+        return PgVectorEmbeddingStore.datasourceBuilder()
+                .datasource(dataSource)
                 .table("chunk_embedding")
                 .dimension(1024)
                 .createTable(false)
