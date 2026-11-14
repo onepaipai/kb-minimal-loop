@@ -7,10 +7,10 @@ import java.util.List;
 
 import com.example.kb.dto.IngestResponse;
 import com.github.javaparser.ParseProblemException;
-import com.github.javaparser.Range;
 import com.github.javaparser.StaticJavaParser;
 import com.github.javaparser.ast.CompilationUnit;
 import com.github.javaparser.ast.body.MethodDeclaration;
+import com.github.javaparser.ast.comments.JavadocComment;
 import dev.langchain4j.data.document.Metadata;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
@@ -58,6 +58,9 @@ public class CodeIngestService {
         if (cu.getPackageDeclaration().isPresent()) {
             packageName = cu.getPackageDeclaration().get().getNameAsString();
         }
+        if (cu.getPrimaryType().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件中没有类定义");
+        }
         String className = cu.getPrimaryType().get().getNameAsString();
         String fullClassName = className;
         if (!packageName.isEmpty()) {
@@ -84,15 +87,26 @@ public class CodeIngestService {
                                             String source, CompilationUnit cu) {
         List<String> lines = List.of(source.split("\n", -1));
         List<MethodDeclaration> methods = cu.findAll(MethodDeclaration.class);
-        // 先算出每个方法的起始行（含 javadoc），类头块切到最小起始行之前
+        // 先算出每个方法的起止行（含 javadoc），类头块切到最小起始行之前；
+        // Range 理论上必然存在，缺失时按 400 兜底而不是抛 500
         List<Integer> beginLines = new ArrayList<>();
+        List<Integer> endLines = new ArrayList<>();
         int firstMethodBegin = lines.size() + 1;
         for (MethodDeclaration method : methods) {
+            if (method.getRange().isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Java 文件解析结果缺少方法位置信息");
+            }
             int begin = method.getRange().get().begin.line;
+            int end = method.getRange().get().end.line;
             if (method.getJavadocComment().isPresent()) {
-                begin = method.getJavadocComment().get().getRange().get().begin.line;
+                JavadocComment javadoc = method.getJavadocComment().get();
+                if (javadoc.getRange().isEmpty()) {
+                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Java 文件解析结果缺少注释位置信息");
+                }
+                begin = javadoc.getRange().get().begin.line;
             }
             beginLines.add(begin);
+            endLines.add(end);
             if (begin < firstMethodBegin) {
                 firstMethodBegin = begin;
             }
@@ -102,10 +116,9 @@ public class CodeIngestService {
                 joinLines(lines, 1, firstMethodBegin - 1), "类头", "类头"));
         for (int i = 0; i < methods.size(); i++) {
             MethodDeclaration method = methods.get(i);
-            Range range = method.getRange().get();
             String signature = method.getDeclarationAsString(true, true, true);
             segments.add(newSegment(fileName, fullClassName, packageName,
-                    joinLines(lines, beginLines.get(i), range.end.line),
+                    joinLines(lines, beginLines.get(i), endLines.get(i)),
                     method.getNameAsString(), signature));
         }
         return segments;
