@@ -47,7 +47,8 @@ public class IngestService {
         if (content.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件内容为空");
         }
-        // 同名先删旧块，保证重复上传不产生重复块
+        // 同名先删旧块，保证重复上传不产生重复块。
+        // TODO 该顺序非原子：入库中途失败（向量接口报错、断库）旧块已丢失；接入正式数据前需改为先入后删或加事务/备份
         embeddingStore.removeAll(MetadataFilterBuilder.metadataKey("source").isEqualTo(fileName));
         Metadata metadata = new Metadata();
         metadata.put("source", fileName);

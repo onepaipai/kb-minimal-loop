@@ -149,6 +149,7 @@ curl -X DELETE "http://localhost:8080/api/document?source=报销制度.txt"
 - 表结构由 `schema.sql` 创建，向量库配置为 `createTable=false`、`skipCreateVectorExtension=true`，二者不重复建表
 - 元数据存储模式为 `COMBINED_JSONB`，对应 `schema.sql` 中的 `metadata JSONB` 列
 - 项目不包含前端、权限过滤、PDF/Word 解析，仅 .txt；同名文档上传为整体替换，不做内容级去重
+- 同名文件替换为“先删旧块再入库”，**非原子**：入库中途失败（向量接口报错、断库）会导致旧文档丢失，接入正式数据前必须改为先入后删或加事务/备份
 - 接口无鉴权（演示定位）：正式使用需增加鉴权与限流，sessionId 按登录用户隔离并换集中存储
 - 项目按约定不含单元测试与 CI，改动后以 `mvn clean package -DskipTests` 与接口实测验证
 - 上传超过 5MB 会被拒绝（multipart 上限配置于 application.yml）

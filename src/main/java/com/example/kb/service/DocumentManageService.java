@@ -46,12 +46,16 @@ public class DocumentManageService {
     }
 
     /**
-     * 统计指定 source 的已入库块数。
+     * 统计指定 source 的已入库块数。Postgres 的 count(*) 返回 bigint，用 Long 接收避免类型窄化问题。
      */
     public int countBySource(String source) {
-        return jdbcTemplate.queryForObject(
+        Long count = jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM " + TABLE + " WHERE metadata->>'source' = ?",
-                Integer.class, source);
+                Long.class, source);
+        if (count == null) {
+            return 0;
+        }
+        return count.intValue();
     }
 
     /**
