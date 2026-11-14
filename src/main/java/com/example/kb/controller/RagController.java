@@ -1,6 +1,8 @@
 package com.example.kb.controller;
 
 import java.io.IOException;
+import java.util.Locale;
+import java.util.Set;
 
 import com.example.kb.dto.AskRequest;
 import com.example.kb.dto.AskResponse;
@@ -28,6 +30,9 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api")
 public class RagController {
 
+    /** 支持上传的文件后缀白名单（不区分大小写） */
+    private static final Set<String> SUPPORTED_SUFFIXES = Set.of(".txt", ".pdf", ".doc", ".docx", ".md");
+
     private final IngestService ingestService;
     private final RagService ragService;
     private final DocumentManageService documentManageService;
@@ -40,13 +45,22 @@ public class RagController {
     }
 
     /**
-     * 上传 .txt 文档并切块入库。
+     * 上传文档并切块入库，支持 .txt/.pdf/.doc/.docx/.md。
      */
     @PostMapping("/ingest")
     public IngestResponse ingest(@RequestParam("file") MultipartFile file) throws IOException {
         String fileName = file.getOriginalFilename();
-        if (fileName == null || !fileName.endsWith(".txt")) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "仅支持上传 .txt 文件");
+        boolean supported = false;
+        if (fileName != null) {
+            String lowerName = fileName.toLowerCase(Locale.ROOT);
+            for (String suffix : SUPPORTED_SUFFIXES) {
+                if (lowerName.endsWith(suffix)) {
+                    supported = true;
+                }
+            }
+        }
+        if (!supported) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "仅支持 .txt/.pdf/.doc/.docx/.md 文件");
         }
         return ingestService.ingest(file);
     }

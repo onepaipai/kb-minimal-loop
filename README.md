@@ -1,6 +1,6 @@
 # Rag_Java —— AI 知识库最小闭环
 
-单文档知识库演示：上传 .txt 文档 → 递归切块 → DashScope 向量化 → 存入 Neon Postgres（pgvector）→ 提问时检索最相似片段 → DeepSeek 带 [1][2] 引用作答。
+知识库演示：上传文档（.txt/.pdf/.doc/.docx/.md）→ 递归切块 → DashScope 向量化 → 存入 Neon Postgres（pgvector）→ 提问时检索最相似片段 → DeepSeek 带 [1][2] 引用作答。PDF/DOC/DOCX/MD 由 LangChain4j 的 `ApacheTikaDocumentParser` 解析（内嵌 Tika 3.2.3）。
 
 ## 技术栈
 
@@ -65,6 +65,7 @@ mvn clean spring-boot:run
 
 ```bash
 curl -X POST http://localhost:8080/api/ingest -F "file=@docs/请假制度.txt"
+curl -X POST http://localhost:8080/api/ingest -F "file=@docs/产品手册.pdf"
 ```
 
 返回：
@@ -72,6 +73,8 @@ curl -X POST http://localhost:8080/api/ingest -F "file=@docs/请假制度.txt"
 ```json
 {"file":"请假制度.txt","chunks":1}
 ```
+
+支持后缀：`.txt` 直读 UTF-8；`.pdf/.doc/.docx/.md` 走 Tika 解析（扩展名不区分大小写）。扫描版 PDF（纯图片无文字层）返回 400——Tika 不含 OCR，OCR 属后续能力。
 
 ### POST /api/ask —— 检索问答
 
@@ -142,13 +145,18 @@ curl -X DELETE "http://localhost:8080/api/document?source=报销制度.txt"
 8. 校验：question 为空、maxResults=0、minScore=2 均返回 400
 9. 重复上传：同一文件传两次，清单块数不翻倍（同名整体替换）
 10. 接口异常返回 Spring 默认 JSON 错误结构（非堆栈文本）
+11. 多格式：上传 .pdf 与 .docx 后 `GET /api/documents` 能列出且块数 >0，各自内容能检索回答并带引用
+12. 扫描版 PDF（纯图片无文字层）上传返回 400“解析后无有效文本内容”，不静默存 0 块
+13. 上传 .exe 等非白名单后缀返回 400
 
 ## 注意
 
 - 上传的 .txt 必须 UTF-8 编码，否则中文会乱码
 - 表结构由 `schema.sql` 创建，向量库配置为 `createTable=false`、`skipCreateVectorExtension=true`，二者不重复建表
 - 元数据存储模式为 `COMBINED_JSONB`，对应 `schema.sql` 中的 `metadata JSONB` 列
-- 项目不包含前端、权限过滤、PDF/Word 解析，仅 .txt；同名文档上传为整体替换，不做内容级去重
+- 项目不包含前端、权限过滤；支持 .txt/.pdf/.doc/.docx/.md，同名文档上传为整体替换，不做内容级去重
+- 文档解析仅用 `langchain4j-document-parser-apache-tika`（内嵌 Tika 3.2.3），严禁额外引入 Tika 4.x 或 tika-bom——Tika 4 改了 `Parser.parse` 签名，会编译通过但运行时 `NoSuchMethodError`；该包体积大，打包与首次解析偏慢属正常
+- Tika 不含 OCR：扫描版 PDF（纯图片）解析不出文字，返回 400 而非静默入库；OCR 是下一步的事
 - 同名文件替换为“先删旧块再入库”，**非原子**：入库中途失败（向量接口报错、断库）会导致旧文档丢失，接入正式数据前必须改为先入后删或加事务/备份
 - 接口无鉴权（演示定位）：正式使用需增加鉴权与限流，sessionId 按登录用户隔离并换集中存储
 - 项目按约定不含单元测试与 CI，改动后以 `mvn clean package -DskipTests` 与接口实测验证

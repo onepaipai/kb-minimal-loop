@@ -3,9 +3,9 @@ spring:
     name: kb-minimal-loop
   servlet:
     multipart:
-      # 上传上限：单文件 5MB，超出直接拒绝，避免大文件拖垮入库
-      max-file-size: 5MB
-      max-request-size: 10MB
+      # 上传上限：单文件 20MB（PDF 带图体积大），请求总量 30MB，超出直接拒绝
+      max-file-size: 20MB
+      max-request-size: 30MB
   datasource:
     # Neon Postgres 直连地址（非 -pooler 端点），5 个敏感值全部走环境变量，不写死
     url: ${DB_URL}

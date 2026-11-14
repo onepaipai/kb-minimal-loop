@@ -21,6 +21,7 @@
         <java.version>17</java.version>
         <langchain4j.version>1.22.0</langchain4j.version>
         <langchain4j-pgvector.version>1.22.0-beta32</langchain4j-pgvector.version>
+        <langchain4j-tika.version>1.22.0-beta32</langchain4j-tika.version>
     </properties>
 
     <dependencies>
@@ -51,6 +52,12 @@
             <groupId>dev.langchain4j</groupId>
             <artifactId>langchain4j-pgvector</artifactId>
             <version>${langchain4j-pgvector.version}</version>
+        </dependency>
+        <!-- Tika 文档解析（PDF/DOC/DOCX/MD 等）：传递依赖已含 Tika 3.2.3，严禁额外引入 Tika 4.x 或 tika-bom（Tika 4 改了 Parser.parse 签名，会运行时 NoSuchMethodError） -->
+        <dependency>
+            <groupId>dev.langchain4j</groupId>
+            <artifactId>langchain4j-document-parser-apache-tika</artifactId>
+            <version>${langchain4j-tika.version}</version>
         </dependency>
         <!-- PostgreSQL 驱动：Spring 执行 schema.sql 时使用 -->
         <dependency>
