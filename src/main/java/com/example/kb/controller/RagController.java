@@ -52,10 +52,19 @@ public class RagController {
     }
 
     /**
-     * 基于知识库检索结果回答问题。
+     * 基于知识库检索结果回答问题。入参越界一律 400。
      */
     @PostMapping("/ask")
     public AskResponse ask(@RequestBody AskRequest request) {
+        if (request.getQuestion() == null || request.getQuestion().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "question 不能为空");
+        }
+        if (request.getMaxResults() != null && (request.getMaxResults() < 1 || request.getMaxResults() > 20)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "maxResults 仅允许 1-20");
+        }
+        if (request.getMinScore() != null && (request.getMinScore() < 0 || request.getMinScore() > 1)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "minScore 仅允许 0-1");
+        }
         return ragService.ask(request);
     }
 

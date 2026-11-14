@@ -122,25 +122,33 @@ curl http://localhost:8080/api/documents
 curl -X DELETE "http://localhost:8080/api/document?source=报销制度.txt"
 ```
 
-返回：
+返回（`deletedChunks` 为实际删除的块数，按删除前后统计差值计算）：
 
 ```json
-{"source":"报销制度.txt","deleted":true}
+{"source":"报销制度.txt","deleted":true,"deletedChunks":1}
 ```
 
-注意：重复上传同一文件会追加重复块，本实现不做自动去重；更新文档内容前请先删除旧文档再重新上传。
+同名文件重复上传时自动先删旧块再入库（整体替换），清单块数不会翻倍。
 
 ## 验收清单
 
-1. `mvn clean compile` 通过
-2. 设好 5 个环境变量后 `mvn clean spring-boot:run` 启动成功
-3. curl 上传 `docs/请假制度.txt` 返回 `chunks > 0`
-4. 问“请假超过3天找谁批？”回答“部门经理+HR 共同审批”并带 `[1]` 引用
-5. 问“食堂几点开”回答“资料里没找到”
+1. `mvn clean compile` / `mvn clean package -DskipTests` 通过
+2. 设好 5 个环境变量后 `mvn clean spring-boot:run` 启动成功（schema.sql 自动执行）
+3. 上传 `docs/请假制度.txt` 返回 `chunks > 0`；`GET /api/documents` 能列出该文件
+4. 问“请假超过3天找谁批？”回答“部门经理+HR 共同审批”并带 `[1]` 引用；问“食堂几点开”回答“资料里没找到”
+5. 多轮：同 sessionId 先问“请假超过3天找谁批？”再问“那1天以内的呢？”，第二轮能按资料答“向直属主管口头说明即可”且标注引用
+6. 定向检索：`sources:["报销制度.txt"]` 问“高铁能报多少钱？”能答“二等座实报实销”
+7. 删除：`DELETE /api/document?source=报销制度.txt` 返回的 `deletedChunks` 与清单中该文档块数一致，再查清单该项消失
+8. 校验：question 为空、maxResults=0、minScore=2 均返回 400
+9. 重复上传：同一文件传两次，清单块数不翻倍（同名整体替换）
+10. 接口异常返回 Spring 默认 JSON 错误结构（非堆栈文本）
 
 ## 注意
 
 - 上传的 .txt 必须 UTF-8 编码，否则中文会乱码
 - 表结构由 `schema.sql` 创建，向量库配置为 `createTable=false`、`skipCreateVectorExtension=true`，二者不重复建表
 - 元数据存储模式为 `COMBINED_JSONB`，对应 `schema.sql` 中的 `metadata JSONB` 列
-- 项目不包含前端、权限过滤、PDF/Word 解析、去重/增量，仅 .txt
+- 项目不包含前端、权限过滤、PDF/Word 解析，仅 .txt；同名文档上传为整体替换，不做内容级去重
+- 接口无鉴权（演示定位）：正式使用需增加鉴权与限流，sessionId 按登录用户隔离并换集中存储
+- 项目按约定不含单元测试与 CI，改动后以 `mvn clean package -DskipTests` 与接口实测验证
+- 上传超过 5MB 会被拒绝（multipart 上限配置于 application.yml）

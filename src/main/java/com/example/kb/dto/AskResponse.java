@@ -3,7 +3,7 @@ package com.example.kb.dto;
 import java.util.List;
 
 /**
- * /api/ask 出参：回答与引用来源列表（第 i 个来源对应回答中的 [i]）。
+ * /api/ask 出参：回答、去重后的引用来源列表与逐条引用详情（编号对应关系看 hits）。
  */
 public class AskResponse {
 

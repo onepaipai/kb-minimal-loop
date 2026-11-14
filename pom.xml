@@ -12,9 +12,9 @@
     </parent>
 
     <groupId>com.example</groupId>
-    <artifactId>rag-kb</artifactId>
+    <artifactId>kb-minimal-loop</artifactId>
     <version>1.0.0</version>
-    <name>rag-kb</name>
+    <name>kb-minimal-loop</name>
     <description>AI 知识库最小闭环：文档入库 + 检索问答</description>
 
     <properties>

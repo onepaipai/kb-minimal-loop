@@ -33,7 +33,7 @@ public class DocumentManageService {
     public DocumentListResponse listDocuments() {
         // 简单聚合在 SQL 层完成，结果组装留在 Java 层
         String sql = "SELECT metadata->>'source' AS source, count(*) AS chunks FROM " + TABLE
-                + " GROUP BY metadata->>'source' ORDER BY source";
+                + " WHERE metadata->>'source' IS NOT NULL GROUP BY metadata->>'source' ORDER BY source";
         List<DocumentSummary> documents = jdbcTemplate.query(sql, (rs, rowNum) -> {
             DocumentSummary summary = new DocumentSummary();
             summary.setSource(rs.getString("source"));
@@ -46,16 +46,25 @@ public class DocumentManageService {
     }
 
     /**
-     * 删除指定文档的全部块，返回是否确有删除。
+     * 统计指定 source 的已入库块数。
      */
-    public DeleteDocumentResponse deleteDocument(String source) {
-        Integer count = jdbcTemplate.queryForObject(
+    public int countBySource(String source) {
+        return jdbcTemplate.queryForObject(
                 "SELECT count(*) FROM " + TABLE + " WHERE metadata->>'source' = ?",
                 Integer.class, source);
+    }
+
+    /**
+     * 删除指定文档的全部块，deletedChunks 为删除前后统计差值（实际删除量）。
+     */
+    public DeleteDocumentResponse deleteDocument(String source) {
+        int before = countBySource(source);
         embeddingStore.removeAll(MetadataFilterBuilder.metadataKey("source").isEqualTo(source));
+        int deletedChunks = before - countBySource(source);
         DeleteDocumentResponse response = new DeleteDocumentResponse();
         response.setSource(source);
-        response.setDeleted(count != null && count > 0);
+        response.setDeletedChunks(deletedChunks);
+        response.setDeleted(deletedChunks > 0);
         return response;
     }
 }

@@ -1,8 +1,10 @@
 package com.example.kb.service;
 
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import com.example.kb.dto.AskRequest;
@@ -32,10 +34,11 @@ import org.springframework.stereotype.Service;
 @Service
 public class RagService {
 
-    /** 系统提示词写死：只按资料作答，资料里没有就明说，回答带 [1][2] 引用 */
+    /** 系统提示词写死：只按本轮资料作答，历史对话仅用于理解指代，回答带 [1][2] 引用 */
     private static final String SYSTEM_PROMPT =
-            "你是企业知识库问答助手。你只能根据下面提供的资料回答问题；"
-                    + "如果资料里没有相关内容，必须回答“资料里没找到”，不要编造任何信息。"
+            "你是企业知识库问答助手。你只能根据本轮提供的资料回答问题；"
+                    + "对话历史仅用于理解当前问题中的指代，历史回答不得作为答案来源；"
+                    + "如果本轮资料里没有相关内容，必须回答“资料里没找到”，不要编造任何信息。"
                     + "回答时必须在对应内容后面标注引用编号，格式如 [1][2]。";
 
     private static final int MAX_RESULTS = 5;
@@ -43,7 +46,7 @@ public class RagService {
     /** 每个会话最多保留的对话消息条数（约 10 轮） */
     private static final int MAX_MEMORY_MESSAGES = 20;
 
-    /** 会话记忆暂存内存：TODO 生产环境需换持久化存储，服务重启后会话即失 */
+    /** 会话记忆暂存内存：TODO 生产环境需换持久化存储、增加过期清理，且 sessionId 需按登录用户隔离（当前由客户端任意指定） */
     private final Map<String, ChatMemory> memoryMap = new ConcurrentHashMap<>();
 
     private final EmbeddingModel embeddingModel;
@@ -82,14 +85,14 @@ public class RagService {
         EmbeddingSearchResult<TextSegment> searchResult = embeddingStore.search(searchRequestBuilder.build());
         List<EmbeddingMatch<TextSegment>> matches = searchResult.matches();
 
-        List<String> sources = new ArrayList<>();
+        Set<String> distinctSources = new LinkedHashSet<>();
         List<ReferenceHit> hits = new ArrayList<>();
         StringBuilder contextBuilder = new StringBuilder();
         for (int i = 0; i < matches.size(); i++) {
             TextSegment segment = matches.get(i).embedded();
             String source = segment.metadata().getString("source");
             contextBuilder.append("[").append(i + 1).append("] ").append(segment.text()).append("\n\n");
-            sources.add(source);
+            distinctSources.add(source);
             ReferenceHit hit = new ReferenceHit();
             hit.setIndex(i + 1);
             hit.setScore(matches.get(i).score());
@@ -123,7 +126,7 @@ public class RagService {
 
         AskResponse response = new AskResponse();
         response.setAnswer(answer);
-        response.setSources(sources);
+        response.setSources(new ArrayList<>(distinctSources));
         response.setHits(hits);
         return response;
     }

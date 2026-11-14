@@ -1,6 +1,11 @@
 spring:
   application:
-    name: rag-kb
+    name: kb-minimal-loop
+  servlet:
+    multipart:
+      # 上传上限：单文件 5MB，超出直接拒绝，避免大文件拖垮入库
+      max-file-size: 5MB
+      max-request-size: 10MB
   datasource:
     # Neon Postgres 直连地址（非 -pooler 端点），5 个敏感值全部走环境变量，不写死
     url: ${DB_URL}
