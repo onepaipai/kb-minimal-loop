@@ -7,6 +7,7 @@ import com.example.kb.dto.IngestResponse;
 import dev.langchain4j.data.document.Document;
 import dev.langchain4j.data.document.DocumentSplitter;
 import dev.langchain4j.data.document.Metadata;
+import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
@@ -23,10 +24,12 @@ import org.springframework.web.server.ResponseStatusException;
 public class IngestService {
 
     private final EmbeddingStoreIngestor embeddingStoreIngestor;
+    private final EmbeddingStore<TextSegment> embeddingStore;
     private final DocumentManageService documentManageService;
 
     public IngestService(DocumentSplitter documentSplitter, EmbeddingModel embeddingModel,
                          EmbeddingStore<TextSegment> embeddingStore, DocumentManageService documentManageService) {
+        this.embeddingStore = embeddingStore;
         this.documentManageService = documentManageService;
         this.embeddingStoreIngestor = EmbeddingStoreIngestor.builder()
                 .documentSplitter(documentSplitter)
