@@ -9,6 +9,12 @@ public class AskRequest {
 
     private String question;
     private List<String> sources;
+    /** 可选：多轮会话标识，传入后该会话的问答历史会被保留用于追问 */
+    private String sessionId;
+    /** 可选：最大检索块数，不传用默认 5 */
+    private Integer maxResults;
+    /** 可选：最低相关度分数（0~1），不传用默认 0.55 */
+    private Double minScore;
 
     public String getQuestion() {
         return question;
@@ -24,5 +30,29 @@ public class AskRequest {
 
     public void setSources(List<String> sources) {
         this.sources = sources;
+    }
+
+    public String getSessionId() {
+        return sessionId;
+    }
+
+    public void setSessionId(String sessionId) {
+        this.sessionId = sessionId;
+    }
+
+    public Integer getMaxResults() {
+        return maxResults;
+    }
+
+    public void setMaxResults(Integer maxResults) {
+        this.maxResults = maxResults;
+    }
+
+    public Double getMinScore() {
+        return minScore;
+    }
+
+    public void setMinScore(Double minScore) {
+        this.minScore = minScore;
     }
 }

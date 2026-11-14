@@ -92,6 +92,18 @@ curl -X POST http://localhost:8080/api/ask -H "Content-Type: application/json" -
 curl -X POST http://localhost:8080/api/ask -H "Content-Type: application/json" -d '{"question":"高铁能报多少钱？","sources":["报销制度.txt"]}'
 ```
 
+入参还支持三个可选调优项：`sessionId`（多轮追问，同会话保留问答历史）、`maxResults`、`minScore`：
+
+```bash
+# 多轮追问：第二轮能理解“那 1 天以内的”指代上一轮的请假话题
+curl -X POST http://localhost:8080/api/ask -H "Content-Type: application/json" -d '{"question":"请假超过3天找谁批？","sessionId":"demo-1"}'
+curl -X POST http://localhost:8080/api/ask -H "Content-Type: application/json" -d '{"question":"那1天以内的呢？","sessionId":"demo-1"}'
+# 调整检索参数
+curl -X POST http://localhost:8080/api/ask -H "Content-Type: application/json" -d '{"question":"差旅报销多久内提交？","maxResults":3,"minScore":0.6}'
+```
+
+会话记忆暂存在服务内存中（每个会话最多保留 20 条消息，约 10 轮），服务重启后会话即失效；生产环境应换持久化存储。
+
 ### GET /api/documents —— 已入库文档清单
 
 ```bash

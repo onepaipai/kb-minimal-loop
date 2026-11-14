@@ -2,15 +2,20 @@ package com.example.kb.service;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import com.example.kb.dto.AskRequest;
 import com.example.kb.dto.AskResponse;
 import com.example.kb.dto.ReferenceHit;
 import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
 import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.memory.ChatMemory;
+import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.output.Response;
@@ -35,6 +40,11 @@ public class RagService {
 
     private static final int MAX_RESULTS = 5;
     private static final double MIN_SCORE = 0.55;
+    /** 每个会话最多保留的对话消息条数（约 10 轮） */
+    private static final int MAX_MEMORY_MESSAGES = 20;
+
+    /** 会话记忆暂存内存：TODO 生产环境需换持久化存储，服务重启后会话即失 */
+    private final Map<String, ChatMemory> memoryMap = new ConcurrentHashMap<>();
 
     private final EmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
@@ -51,10 +61,19 @@ public class RagService {
      */
     public AskResponse ask(AskRequest request) {
         Response<Embedding> embeddingResponse = embeddingModel.embed(request.getQuestion());
+        // 入参可选覆盖检索参数，不传用默认值
+        int maxResults = MAX_RESULTS;
+        if (request.getMaxResults() != null) {
+            maxResults = request.getMaxResults();
+        }
+        double minScore = MIN_SCORE;
+        if (request.getMinScore() != null) {
+            minScore = request.getMinScore();
+        }
         EmbeddingSearchRequest.EmbeddingSearchRequestBuilder searchRequestBuilder = EmbeddingSearchRequest.builder()
                 .queryEmbedding(embeddingResponse.content())
-                .maxResults(MAX_RESULTS)
-                .minScore(MIN_SCORE);
+                .maxResults(maxResults)
+                .minScore(minScore);
         // 指定了文档范围时，只在对应 source 的块内检索
         if (request.getSources() != null && !request.getSources().isEmpty()) {
             searchRequestBuilder.filter(MetadataFilterBuilder.metadataKey("source")
@@ -80,8 +99,27 @@ public class RagService {
         }
         String prompt = "资料：\n" + contextBuilder + "问题：" + request.getQuestion();
 
-        List<ChatMessage> messages = List.of(SystemMessage.from(SYSTEM_PROMPT), UserMessage.from(prompt));
+        // 有 sessionId 时加载该会话的历史问答，用于理解追问中的指代
+        ChatMemory chatMemory = null;
+        if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
+            chatMemory = memoryMap.computeIfAbsent(request.getSessionId(), id -> MessageWindowChatMemory.builder()
+                    .id(id)
+                    .maxMessages(MAX_MEMORY_MESSAGES)
+                    .build());
+        }
+        List<ChatMessage> messages = new ArrayList<>();
+        messages.add(SystemMessage.from(SYSTEM_PROMPT));
+        if (chatMemory != null) {
+            messages.addAll(chatMemory.messages());
+        }
+        messages.add(UserMessage.from(prompt));
         String answer = chatModel.chat(messages).aiMessage().text();
+
+        // 历史里只存问答原文，不含本轮资料段，避免上下文重复膨胀
+        if (chatMemory != null) {
+            chatMemory.add(UserMessage.from(request.getQuestion()));
+            chatMemory.add(AiMessage.from(answer));
+        }
 
         AskResponse response = new AskResponse();
         response.setAnswer(answer);
