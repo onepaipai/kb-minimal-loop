@@ -1,7 +1,7 @@
 package com.charles.kb.config;
 
 import dev.langchain4j.data.segment.TextSegment;
-import dev.langchain4j.data.document.splitter.DocumentSplitter;
+import dev.langchain4j.data.document.DocumentSplitter;
 import dev.langchain4j.data.document.splitter.DocumentSplitters;
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
