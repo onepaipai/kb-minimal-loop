@@ -9,6 +9,7 @@ import com.example.kb.dto.AskResponse;
 import com.example.kb.dto.DeleteDocumentResponse;
 import com.example.kb.dto.DocumentListResponse;
 import com.example.kb.dto.IngestResponse;
+import com.example.kb.service.CodeIngestService;
 import com.example.kb.service.DocumentManageService;
 import com.example.kb.service.IngestService;
 import com.example.kb.service.RagService;
@@ -31,36 +32,43 @@ import org.springframework.web.server.ResponseStatusException;
 public class RagController {
 
     /** 支持上传的文件后缀白名单（不区分大小写） */
-    private static final Set<String> SUPPORTED_SUFFIXES = Set.of(".txt", ".pdf", ".doc", ".docx", ".md");
+    private static final Set<String> SUPPORTED_SUFFIXES = Set.of(".txt", ".pdf", ".doc", ".docx", ".md", ".java");
 
     private final IngestService ingestService;
     private final RagService ragService;
     private final DocumentManageService documentManageService;
+    private final CodeIngestService codeIngestService;
 
     public RagController(IngestService ingestService, RagService ragService,
-                         DocumentManageService documentManageService) {
+                         DocumentManageService documentManageService, CodeIngestService codeIngestService) {
         this.ingestService = ingestService;
         this.ragService = ragService;
         this.documentManageService = documentManageService;
+        this.codeIngestService = codeIngestService;
     }
 
     /**
-     * 上传文档并切块入库，支持 .txt/.pdf/.doc/.docx/.md。
+     * 上传文档并切块入库，支持 .txt/.pdf/.doc/.docx/.md/.java。
      */
     @PostMapping("/ingest")
     public IngestResponse ingest(@RequestParam("file") MultipartFile file) throws IOException {
         String fileName = file.getOriginalFilename();
-        boolean supported = false;
+        String lowerName = "";
         if (fileName != null) {
-            String lowerName = fileName.toLowerCase(Locale.ROOT);
-            for (String suffix : SUPPORTED_SUFFIXES) {
-                if (lowerName.endsWith(suffix)) {
-                    supported = true;
-                }
+            lowerName = fileName.toLowerCase(Locale.ROOT);
+        }
+        boolean supported = false;
+        for (String suffix : SUPPORTED_SUFFIXES) {
+            if (lowerName.endsWith(suffix)) {
+                supported = true;
             }
         }
         if (!supported) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "仅支持 .txt/.pdf/.doc/.docx/.md 文件");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "仅支持 .txt/.pdf/.doc/.docx/.md/.java 文件");
+        }
+        if (lowerName.endsWith(".java")) {
+            // Java 单文件走代码知识库入库（JavaParser 按方法切块）
+            return codeIngestService.ingestJava(file);
         }
         return ingestService.ingest(file);
     }

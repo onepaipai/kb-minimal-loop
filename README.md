@@ -76,6 +76,10 @@ curl -X POST http://localhost:8080/api/ingest -F "file=@docs/产品手册.pdf"
 
 支持后缀：`.txt` 直读 UTF-8；`.pdf/.doc/.docx/.md` 走 Tika 解析（扩展名不区分大小写）。扫描版 PDF（纯图片无文字层）返回 400——Tika 不含 OCR，OCR 属后续能力。
 
+### Java 单文件代码知识库
+
+`.java` 文件走独立链路：JavaParser 解析 AST，**一个方法一块、类头（包名+import+类注释+类声明+字段）单独一块**，按 Range 行号切原文保留注释与格式；每块前加定位头 `// 文件：X.java | 类：完整类名 | 方法：方法签名`，元数据带 `source/kind=code/package/class/method/signature`。先解析后删旧块（语法错报 400、旧块不动），问答复用 `/api/ask`。
+
 ### POST /api/ask —— 检索问答
 
 ```bash
@@ -148,6 +152,7 @@ curl -X DELETE "http://localhost:8080/api/document?source=报销制度.txt"
 11. 多格式：上传 .pdf 与 .docx 后 `GET /api/documents` 能列出且块数 >0，各自内容能检索回答并带引用
 12. 扫描版 PDF（纯图片无文字层）上传返回 400“解析后无有效文本内容”，不静默存 0 块
 13. 上传 .exe 等非白名单后缀返回 400
+14. Java 单文件：上传 `src/main/java/com/example/kb/service/IngestService.java` 后 `GET /api/documents` 能列出且块数 = 方法数 + 1 个类头块；问“ingest 是怎么入库的”能答对并带文件与方法引用；语法错的 .java 报 400 且旧块还在
 
 ## 注意
 
