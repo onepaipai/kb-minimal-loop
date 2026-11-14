@@ -46,9 +46,6 @@ public class LangChain4jConfig {
     @Value("${langchain4j.dashscope.model-name}")
     private String dashscopeModelName;
 
-    /** 数据库连接：直接复用 Spring Boot 按 spring.datasource.* 建好的 DataSource，
-     * 这样 DB_URL 里的 ?sslmode=require 等参数不会被手写解析丢掉（Neon 直连要求 SSL）。 */
-
     /**
      * 聊天模型：走 DeepSeek 的 OpenAI 兼容接口。
      */
@@ -83,7 +80,9 @@ public class LangChain4jConfig {
     }
 
     /**
-     * pgvector 向量库：表结构由 schema.sql 负责，这里只做连接与读写。
+     * pgvector 向量库：复用 Spring Boot 按 spring.datasource.* 建好的 DataSource，
+     * DB_URL 里的 ?sslmode=require 等参数完整保留（Neon 直连要求 SSL）；
+     * 表结构由 schema.sql 负责，这里只做读写。
      * 1024 维必须与向量模型 dimensions、schema.sql 中 vector(1024) 三处保持一致。
      */
     @Bean
