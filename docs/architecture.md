@@ -9,7 +9,7 @@
 - `common/exception/`：`GlobalExceptionHandler` 统一异常处理，`ErrorResponse` 统一错误体。
 - `dto/`：接口出入参，不做领域拆分（平铺最直观）。
 - `src/test/`：单元测试（`VisibilityTest`、`DepartmentScopeTest`，不依赖数据库）；CI 见 `.github/workflows/ci.yml`。
-- `src/main/resources/static/`：前端聊天式单页（`index.html`、`styles.css`、`app.js`，原生 JS + fetch，无构建步骤；样式为 Tabler v1.7.5 的 `tabler.min.css`，MIT，GitHub tabler/tabler 的 release 构建，本地引入；布局：深色侧边栏会话列表 + 中央对话气泡，管理功能切视图，会话与消息记录只存浏览器 localStorage）；Spring Boot 默认 serving，`/` 打开即用，`/api/**` 之外的请求安全配置全部放行。
+- `src/main/resources/static/`：前端企业级单页（`index.html`、`styles.css`、`app.js`，原生 JS + fetch，无构建步骤；样式为 Tabler v1.7.5 的 `tabler.min.css`，MIT，GitHub tabler/tabler 的 release 构建，本地引入；布局：品牌登录分栏、深色侧边栏导航与会话列表、总览仪表盘（统计全部来自真实接口）、中央对话气泡，会话与消息记录只存浏览器 localStorage）；Spring Boot 默认 serving，`/` 打开即用，`/api/**` 之外的请求安全配置全部放行。
 
 ## 数据流
 

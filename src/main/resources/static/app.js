@@ -78,14 +78,56 @@ function logout(message, clearChat = false) {
 function showApp() {
     $('loginView').hidden = true;
     $('appView').hidden = false;
-    $('userInfo').textContent = currentUser.username + '（' + currentUser.role
-        + (currentUser.department ? '，' + currentUser.department : '') + '）';
+    $('userInfo').textContent = currentUser.username + '（' + currentUser.role + '）';
+    $('userAvatar').textContent = currentUser.username.charAt(0).toUpperCase();
+    const deptBadge = $('deptBadge');
+    if (currentUser.department) {
+        deptBadge.hidden = false;
+        deptBadge.textContent = currentUser.department;
+    } else {
+        deptBadge.hidden = true;
+    }
     $('adminNavBtn').hidden = currentUser.role !== 'ADMIN';
     ensureSession();
-    showView('chat');
+    showView('dashboard'); // 切到总览时自动刷新统计
     loadDocuments(0);
     if (currentUser.role === 'ADMIN') {
         loadUsers();
+    }
+}
+
+/** 总览统计全部来自真实接口：文档总数与块数来自 /api/documents，用户数来自 /api/admin/users。 */
+async function loadDashboard() {
+    $('statDept').textContent = currentUser.department || '全部';
+    try {
+        const data = await api('/api/documents?page=0&size=100');
+        $('statDocs').textContent = data.total;
+        const chunks = (data.documents || []).reduce((sum, d) => sum + d.chunks, 0);
+        $('statChunks').textContent = data.total > (data.documents || []).length ? chunks + '+' : chunks;
+        const tbody = $('recentDocsTable').querySelector('tbody');
+        tbody.textContent = '';
+        (data.documents || []).slice(0, 5).forEach((doc) => {
+            const row = document.createElement('tr');
+            const source = document.createElement('td');
+            source.textContent = doc.source;
+            const chunkCell = document.createElement('td');
+            chunkCell.textContent = doc.chunks;
+            const visibility = document.createElement('td');
+            visibility.textContent = doc.visibility;
+            row.append(source, chunkCell, visibility);
+            tbody.appendChild(row);
+        });
+    } catch (e) {
+        showMessage(e.message);
+    }
+    if (currentUser.role === 'ADMIN') {
+        try {
+            const users = await api('/api/admin/users');
+            $('statUsersCard').hidden = false;
+            $('statUsers').textContent = users.length;
+        } catch (e) {
+            // 用户数拿不到不影响总览其余内容
+        }
     }
 }
 
@@ -340,9 +382,10 @@ async function askStream(request, bubble) {
 
 /* ---------------- 视图切换 ---------------- */
 
-const VIEW_TITLES = { chat: '对话', manage: '文档管理', admin: '用户管理', password: '改密码' };
+const VIEW_TITLES = { dashboard: '总览', chat: '智能问答', manage: '文档管理', admin: '用户管理', password: '改密码' };
 
 function showView(name) {
+    $('dashboardView').hidden = name !== 'dashboard';
     $('chatView').hidden = name !== 'chat';
     $('manageView').hidden = name !== 'manage';
     $('adminView').hidden = name !== 'admin';
@@ -350,8 +393,11 @@ function showView(name) {
     document.querySelectorAll('.sidebar-link').forEach((link) => {
         link.classList.toggle('active', link.dataset.view === name);
     });
-    $('viewTitle').textContent = VIEW_TITLES[name] || '对话';
+    $('viewTitle').textContent = VIEW_TITLES[name] || '总览';
     $('appView').classList.remove('sidebar-open');
+    if (name === 'dashboard') {
+        loadDashboard();
+    }
 }
 
 /* ---------------- 文档清单 / 上传 / 用户 ---------------- */
@@ -448,6 +494,19 @@ $('logoutBtn').addEventListener('click', () => logout('', true));
 
 $('menuBtn').addEventListener('click', () => {
     $('appView').classList.toggle('sidebar-open');
+});
+
+$('quickAskBtn').addEventListener('click', () => showView('chat'));
+$('quickUploadBtn').addEventListener('click', () => showView('manage'));
+$('quickDocsBtn').addEventListener('click', () => showView('manage'));
+
+$('suggestChips').addEventListener('click', (e) => {
+    const chip = e.target.closest('button');
+    if (!chip) {
+        return;
+    }
+    $('question').value = chip.textContent;
+    $('question').focus();
 });
 
 $('newSessionBtn').addEventListener('click', () => {

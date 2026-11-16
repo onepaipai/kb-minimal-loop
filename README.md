@@ -29,7 +29,7 @@ curl -X POST http://localhost:8080/api/ask -H "Authorization: Bearer $TOKEN" -H 
 - [部署](docs/deployment.md)——Neon、环境变量、启动
 - [验收](docs/acceptance.md)——25 条验收清单
 
-`docs/*.txt` 为示例文档（请假 / 报销 / 考勤制度），可直接上传验证。前端聊天式单页在 `src/main/resources/static/`（`index.html`、`styles.css`、`app.js`，无构建步骤，样式为 Tabler v1.7.5 的 `tabler.min.css`，启动后打开 `http://localhost:8080/`）。
+`docs/*.txt` 为示例文档（请假 / 报销 / 考勤制度），可直接上传验证。前端企业级单页在 `src/main/resources/static/`（`index.html`、`styles.css`、`app.js`，无构建步骤，样式为 Tabler v1.7.5 的 `tabler.min.css`，启动后打开 `http://localhost:8080/`）。
 
 ## 代码结构
 

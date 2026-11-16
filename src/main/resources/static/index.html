@@ -3,57 +3,140 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>知识库</title>
+<title>企业知识库</title>
 <link rel="stylesheet" href="tabler.min.css">
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div id="loginView" class="login-wrap" hidden>
-  <div class="card login-card">
-    <div class="card-body">
-      <h1 class="login-title">知识库</h1>
-      <p class="text-secondary">企业文档与代码知识库</p>
-      <form id="loginForm">
-        <div class="mb-3">
-          <label class="form-label" for="loginUsername">用户名</label>
-          <input id="loginUsername" class="form-control" type="text" autocomplete="username" required>
-        </div>
-        <div class="mb-3">
-          <label class="form-label" for="loginPassword">密码</label>
-          <input id="loginPassword" class="form-control" type="password" autocomplete="current-password" required>
-        </div>
-        <button type="submit" class="btn btn-primary w-100">登录</button>
-      </form>
+<div id="loginView" class="login-split" hidden>
+  <div class="login-brand">
+    <div class="login-logo">KB</div>
+    <h1>企业知识库</h1>
+    <p class="login-brand-sub">企业私有文档与代码知识库</p>
+    <ul class="login-features">
+      <li>私有文档检索，问答带资料来源引用</li>
+      <li>代码知识库，按方法切块精准定位</li>
+      <li>部门权限隔离，文档只对指定部门可见</li>
+    </ul>
+  </div>
+  <div class="login-form-wrap">
+    <div class="card login-card">
+      <div class="card-body">
+        <h2 class="login-title">登录</h2>
+        <p class="text-secondary">使用管理员分配的账号登录</p>
+        <form id="loginForm">
+          <div class="mb-3">
+            <label class="form-label" for="loginUsername">用户名</label>
+            <input id="loginUsername" class="form-control" type="text" autocomplete="username" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="loginPassword">密码</label>
+            <input id="loginPassword" class="form-control" type="password" autocomplete="current-password" required>
+          </div>
+          <button type="submit" class="btn btn-primary w-100">登录</button>
+        </form>
+      </div>
     </div>
   </div>
 </div>
 
-<div id="appView" class="chat-shell" hidden>
-  <aside class="chat-sidebar" id="sidebar">
-    <div class="sidebar-brand">知识库</div>
+<div id="appView" class="app-shell" hidden>
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <span class="brand-mark">KB</span>
+      <span class="brand-text">
+        <span class="brand-name">企业知识库</span>
+        <span class="brand-sub">Enterprise KB</span>
+      </span>
+    </div>
     <button id="newSessionBtn" type="button" class="btn btn-primary w-100">+ 新对话</button>
+    <div class="sidebar-section-label">最近对话</div>
     <nav id="sessionList" class="session-list"></nav>
     <div class="sidebar-nav">
-      <button type="button" class="sidebar-link active" data-view="chat">对话</button>
+      <button type="button" class="sidebar-link active" data-view="dashboard">总览</button>
+      <button type="button" class="sidebar-link" data-view="chat">智能问答</button>
       <button type="button" class="sidebar-link" data-view="manage">文档管理</button>
       <button type="button" class="sidebar-link" data-view="admin" id="adminNavBtn" hidden>用户管理</button>
       <button type="button" class="sidebar-link" data-view="password">改密码</button>
     </div>
     <div class="sidebar-user">
-      <span id="userInfo"></span>
+      <span class="user-avatar" id="userAvatar"></span>
+      <span id="userInfo" class="user-info"></span>
       <button id="logoutBtn" type="button" class="btn btn-outline-light btn-sm">退出</button>
     </div>
   </aside>
 
-  <main class="chat-main">
-    <div class="chat-topbar">
+  <main class="main">
+    <div class="topbar">
       <button id="menuBtn" type="button" class="btn btn-outline-secondary btn-sm d-md-none">☰</button>
-      <span id="viewTitle" class="topbar-title">对话</span>
+      <span id="viewTitle" class="topbar-title">总览</span>
+      <span id="deptBadge" class="badge bg-blue-lt ms-auto" hidden></span>
     </div>
     <div id="message" class="alert alert-warning m-3 mb-0" role="alert" hidden></div>
 
-    <section id="chatView" class="chat-view">
+    <section id="dashboardView" class="page-view">
+      <div class="stat-grid">
+        <div class="card stat-card">
+          <div class="card-body">
+            <div class="stat-num" id="statDocs">—</div>
+            <div class="stat-label">入库文档</div>
+          </div>
+        </div>
+        <div class="card stat-card">
+          <div class="card-body">
+            <div class="stat-num" id="statChunks">—</div>
+            <div class="stat-label">知识块</div>
+          </div>
+        </div>
+        <div class="card stat-card" id="statUsersCard" hidden>
+          <div class="card-body">
+            <div class="stat-num" id="statUsers">—</div>
+            <div class="stat-label">注册用户</div>
+          </div>
+        </div>
+        <div class="card stat-card">
+          <div class="card-body">
+            <div class="stat-num stat-dept" id="statDept">—</div>
+            <div class="stat-label">我的部门</div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">快捷操作</h2>
+        </div>
+        <div class="card-body quick-actions">
+          <button id="quickAskBtn" type="button" class="btn btn-primary">开始问答</button>
+          <button id="quickUploadBtn" type="button" class="btn btn-outline-primary">上传文档</button>
+          <button id="quickDocsBtn" type="button" class="btn btn-outline-primary">查看文档清单</button>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header">
+          <h2 class="card-title">最近入库文档</h2>
+        </div>
+        <div class="card-body">
+          <div class="table-responsive">
+            <table id="recentDocsTable" class="table table-vcenter">
+              <thead><tr><th>文件</th><th>块数</th><th>可见性</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="chatView" class="chat-view" hidden>
+      <div class="chat-intro">
+        <h2>智能问答</h2>
+        <p class="text-secondary mb-0">基于已入库的企业文档与代码回答，回答带资料来源引用；历史记录只用于理解指代，不作为回答依据。</p>
+      </div>
       <div id="messages" class="messages"></div>
+      <div class="suggest-chips" id="suggestChips">
+        <button type="button" class="btn btn-outline-secondary btn-sm">请假超过3天找谁批？</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm">高铁能报多少钱？</button>
+        <button type="button" class="btn btn-outline-secondary btn-sm">差旅报销多久内提交？</button>
+      </div>
       <div class="composer">
         <details class="composer-options">
           <summary>检索选项</summary>
@@ -81,7 +164,7 @@
       </div>
     </section>
 
-    <section id="manageView" class="manage-view" hidden>
+    <section id="manageView" class="page-view" hidden>
       <div class="manage-inner">
         <div class="card">
           <div class="card-header">
@@ -129,7 +212,7 @@
       </div>
     </section>
 
-    <section id="adminView" class="manage-view" hidden>
+    <section id="adminView" class="page-view" hidden>
       <div class="manage-inner">
         <div class="card">
           <div class="card-header">
@@ -173,7 +256,7 @@
       </div>
     </section>
 
-    <section id="passwordView" class="manage-view" hidden>
+    <section id="passwordView" class="page-view" hidden>
       <div class="manage-inner">
         <div class="card">
           <div class="card-header">
