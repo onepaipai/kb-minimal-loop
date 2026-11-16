@@ -19,6 +19,9 @@ import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.memory.ChatMemory;
 import dev.langchain4j.memory.chat.MessageWindowChatMemory;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
+import dev.langchain4j.model.chat.response.ChatResponse;
+import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.output.Response;
 import dev.langchain4j.store.embedding.EmbeddingMatch;
@@ -30,6 +33,7 @@ import org.springframework.stereotype.Service;
 
 /**
  * 检索问答服务：问题向量化 → 检索最像的 5 块 → 拼引用上下文 → 聊天模型作答。
+ * ask() 等整段返回，askStream() 逐 token 流式推送，两者共用 prepare() 的检索与拼装逻辑。
  */
 @Service
 public class RagService {
@@ -52,19 +56,81 @@ public class RagService {
     private final EmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final ChatModel chatModel;
+    private final StreamingChatModel streamingChatModel;
 
-    public RagService(EmbeddingModel embeddingModel, EmbeddingStore<TextSegment> embeddingStore, ChatModel chatModel) {
+    public RagService(EmbeddingModel embeddingModel, EmbeddingStore<TextSegment> embeddingStore,
+                      ChatModel chatModel, StreamingChatModel streamingChatModel) {
         this.embeddingModel = embeddingModel;
         this.embeddingStore = embeddingStore;
         this.chatModel = chatModel;
+        this.streamingChatModel = streamingChatModel;
+    }
+
+    /** 流式问答的事件回调：Controller 接到 SseEmitter 上，顺序为 sources → token* → done / onError。 */
+    public interface StreamListener {
+        void onSources(List<ReferenceHit> hits);
+        void onToken(String token);
+        void onComplete();
+        void onError(Throwable error);
+    }
+
+    /** ask() 与 askStream() 共用的准备结果：拼好的消息列表、会话记忆（无 sessionId 时为 null）、引用。 */
+    private record PreparedAsk(List<ChatMessage> messages, ChatMemory chatMemory,
+                               List<ReferenceHit> hits, List<String> sources) {
     }
 
     /**
      * 检索并回答：把检索到的块拼成带编号的资料段连同问题一起发给模型。
      */
     public AskResponse ask(AskRequest request) {
+        PreparedAsk prepared = prepare(request);
+        String answer = chatModel.chat(prepared.messages()).aiMessage().text();
+        saveMemory(prepared, request.getQuestion(), answer);
+
+        AskResponse response = new AskResponse();
+        response.setAnswer(answer);
+        response.setSources(prepared.sources());
+        response.setHits(prepared.hits());
+        return response;
+    }
+
+    /**
+     * 流式检索问答：先发一次引用来源，再逐 token 发答案，最后发完成；出错走 onError。
+     * 多轮记忆只在完整答案拿到后存一次，绝不在每个 token 到达时存。
+     */
+    public void askStream(AskRequest request, StreamListener listener) {
+        PreparedAsk prepared = prepare(request);
+        listener.onSources(prepared.hits());
+        StringBuilder answerBuilder = new StringBuilder();
+        streamingChatModel.chat(prepared.messages(), new StreamingChatResponseHandler() {
+            @Override
+            public void onPartialResponse(String partialResponse) {
+                answerBuilder.append(partialResponse);
+                listener.onToken(partialResponse);
+            }
+
+            @Override
+            public void onCompleteResponse(ChatResponse completeResponse) {
+                String answer = completeResponse.aiMessage().text();
+                if (answer == null) {
+                    answer = answerBuilder.toString();
+                }
+                saveMemory(prepared, request.getQuestion(), answer);
+                listener.onComplete();
+            }
+
+            @Override
+            public void onError(Throwable error) {
+                listener.onError(error);
+            }
+        });
+    }
+
+    /**
+     * 共用准备：问题向量化 → 检索 → 拼带编号的资料段与问题 → 取会话历史，拼成发给模型的消息列表。
+     */
+    private PreparedAsk prepare(AskRequest request) {
         Response<Embedding> embeddingResponse = embeddingModel.embed(request.getQuestion());
-        // 入参可选覆盖检索参数，不传用默认值
         int maxResults = MAX_RESULTS;
         if (request.getMaxResults() != null) {
             maxResults = request.getMaxResults();
@@ -77,9 +143,8 @@ public class RagService {
                 .queryEmbedding(embeddingResponse.content())
                 .maxResults(maxResults)
                 .minScore(minScore);
-        // 指定了文档范围时，只在对应 source 的块内检索
         if (request.getSources() != null && !request.getSources().isEmpty()) {
-            searchRequestBuilder.filter(MetadataFilterBuilder.metadataKey("source")
+            searchRequestBuilder.filter(MetadataFilterBuilder.metadataKey(MetadataKeys.SOURCE)
                     .isIn(request.getSources().toArray(new String[0])));
         }
         EmbeddingSearchResult<TextSegment> searchResult = embeddingStore.search(searchRequestBuilder.build());
@@ -90,7 +155,7 @@ public class RagService {
         StringBuilder contextBuilder = new StringBuilder();
         for (int i = 0; i < matches.size(); i++) {
             TextSegment segment = matches.get(i).embedded();
-            String source = segment.metadata().getString("source");
+            String source = segment.metadata().getString(MetadataKeys.SOURCE);
             contextBuilder.append("[").append(i + 1).append("] ").append(segment.text()).append("\n\n");
             distinctSources.add(source);
             ReferenceHit hit = new ReferenceHit();
@@ -102,7 +167,6 @@ public class RagService {
         }
         String prompt = "资料：\n" + contextBuilder + "问题：" + request.getQuestion();
 
-        // 有 sessionId 时加载该会话的历史问答，用于理解追问中的指代
         ChatMemory chatMemory = null;
         if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
             chatMemory = memoryMap.computeIfAbsent(request.getSessionId(), id -> MessageWindowChatMemory.builder()
@@ -116,18 +180,14 @@ public class RagService {
             messages.addAll(chatMemory.messages());
         }
         messages.add(UserMessage.from(prompt));
-        String answer = chatModel.chat(messages).aiMessage().text();
+        return new PreparedAsk(messages, chatMemory, hits, new ArrayList<>(distinctSources));
+    }
 
-        // 历史里只存问答原文，不含本轮资料段，避免上下文重复膨胀
-        if (chatMemory != null) {
-            chatMemory.add(UserMessage.from(request.getQuestion()));
-            chatMemory.add(AiMessage.from(answer));
+    /** 历史里只存问答原文，不含本轮资料段，避免上下文重复膨胀。 */
+    private void saveMemory(PreparedAsk prepared, String question, String answer) {
+        if (prepared.chatMemory() != null) {
+            prepared.chatMemory().add(UserMessage.from(question));
+            prepared.chatMemory().add(AiMessage.from(answer));
         }
-
-        AskResponse response = new AskResponse();
-        response.setAnswer(answer);
-        response.setSources(new ArrayList<>(distinctSources));
-        response.setHits(hits);
-        return response;
     }
 }

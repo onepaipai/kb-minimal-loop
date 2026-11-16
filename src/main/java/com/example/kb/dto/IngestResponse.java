@@ -8,6 +8,13 @@ public class IngestResponse {
     private String file;
     private int chunks;
 
+    public static IngestResponse of(String file, int chunks) {
+        IngestResponse response = new IngestResponse();
+        response.setFile(file);
+        response.setChunks(chunks);
+        return response;
+    }
+
     public String getFile() {
         return file;
     }

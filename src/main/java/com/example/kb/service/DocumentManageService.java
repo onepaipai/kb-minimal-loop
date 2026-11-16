@@ -31,7 +31,6 @@ public class DocumentManageService {
      * 按 metadata 里的 source 分组统计已入库文档与块数。
      */
     public DocumentListResponse listDocuments() {
-        // 简单聚合在 SQL 层完成，结果组装留在 Java 层
         String sql = "SELECT metadata->>'source' AS source, count(*) AS chunks FROM " + TABLE
                 + " WHERE metadata->>'source' IS NOT NULL GROUP BY metadata->>'source' ORDER BY source";
         List<DocumentSummary> documents = jdbcTemplate.query(sql, (rs, rowNum) -> {
@@ -63,12 +62,17 @@ public class DocumentManageService {
      */
     public DeleteDocumentResponse deleteDocument(String source) {
         int before = countBySource(source);
-        embeddingStore.removeAll(MetadataFilterBuilder.metadataKey("source").isEqualTo(source));
+        removeBySource(source);
         int deletedChunks = before - countBySource(source);
         DeleteDocumentResponse response = new DeleteDocumentResponse();
         response.setSource(source);
         response.setDeletedChunks(deletedChunks);
         response.setDeleted(deletedChunks > 0);
         return response;
+    }
+
+    /** 删指定 source 的全部块，供入库的同名替换复用。 */
+    public void removeBySource(String source) {
+        embeddingStore.removeAll(MetadataFilterBuilder.metadataKey(MetadataKeys.SOURCE).isEqualTo(source));
     }
 }

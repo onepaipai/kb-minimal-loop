@@ -6,9 +6,11 @@ import dev.langchain4j.data.document.DocumentSplitter;
 import dev.langchain4j.data.document.splitter.DocumentSplitters;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.chat.ChatModel;
+import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
+import dev.langchain4j.model.openai.OpenAiStreamingChatModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.pgvector.DefaultMetadataStorageConfig;
 import dev.langchain4j.store.embedding.pgvector.MetadataStorageConfig;
@@ -21,10 +23,16 @@ import org.springframework.context.annotation.Configuration;
 import javax.sql.DataSource;
 
 /**
- * LangChain4j 统一配置：仅 4 个 Bean（聊天模型、向量模型、切块器、向量库）。
+ * LangChain4j 统一配置：5 个 Bean（聊天模型、流式聊天模型、向量模型、切块器、向量库）。
  */
 @Configuration
 public class LangChain4jConfig {
+
+    /** 向量维度：embedding 模型、向量库、schema.sql 三处必须一致。 */
+    private static final int EMBEDDING_DIMENSION = 1024;
+    /** 文档切块：最大 500 字符、重叠 100 字符。 */
+    private static final int CHUNK_SIZE = 500;
+    private static final int CHUNK_OVERLAP = 100;
 
     /** DeepSeek 聊天模型配置 */
     @Value("${langchain4j.deepseek.api-key}")
@@ -59,7 +67,19 @@ public class LangChain4jConfig {
     }
 
     /**
-     * 向量模型：走 DashScope 的 OpenAI 兼容接口，固定 1024 维。
+     * 流式聊天模型：和 chatModel 同一套 DeepSeek 配置，只换流式类，供 /api/ask-stream 逐 token 推送。
+     */
+    @Bean
+    public StreamingChatModel streamingChatModel() {
+        return OpenAiStreamingChatModel.builder()
+                .baseUrl(deepseekBaseUrl)
+                .apiKey(deepseekApiKey)
+                .modelName(deepseekModelName)
+                .build();
+    }
+
+    /**
+     * 向量模型：走 DashScope 的 OpenAI 兼容接口。
      */
     @Bean
     public EmbeddingModel embeddingModel() {
@@ -67,23 +87,22 @@ public class LangChain4jConfig {
                 .baseUrl(dashscopeBaseUrl)
                 .apiKey(dashscopeApiKey)
                 .modelName(dashscopeModelName)
-                .dimensions(1024)
+                .dimensions(EMBEDDING_DIMENSION)
                 .build();
     }
 
     /**
-     * 文档切块器：最大 500 字符、重叠 100 字符。
+     * 文档切块器。
      */
     @Bean
     public DocumentSplitter documentSplitter() {
-        return DocumentSplitters.recursive(500, 100);
+        return DocumentSplitters.recursive(CHUNK_SIZE, CHUNK_OVERLAP);
     }
 
     /**
      * pgvector 向量库：复用 Spring Boot 按 spring.datasource.* 建好的 DataSource，
      * DB_URL 里的 ?sslmode=require 等参数完整保留（Neon 直连要求 SSL）；
      * 表结构由 schema.sql 负责，这里只做读写。
-     * 1024 维必须与向量模型 dimensions、schema.sql 中 vector(1024) 三处保持一致。
      */
     @Bean
     public EmbeddingStore<TextSegment> embeddingStore(DataSource dataSource) {
@@ -95,7 +114,7 @@ public class LangChain4jConfig {
         return PgVectorEmbeddingStore.datasourceBuilder()
                 .datasource(dataSource)
                 .table("chunk_embedding")
-                .dimension(1024)
+                .dimension(EMBEDDING_DIMENSION)
                 .createTable(false)
                 .skipCreateVectorExtension(true)
                 .metadataStorageConfig(metadataConfig)

@@ -111,6 +111,14 @@ curl -X POST http://localhost:8080/api/ask -H "Content-Type: application/json" -
 
 会话记忆暂存在服务内存中（每个会话最多保留 20 条消息，约 10 轮），服务重启后会话即失效；生产环境应换持久化存储。
 
+### POST /api/ask-stream —— 流式问答（SSE）
+
+与 `/api/ask` 同一套检索、校验与多轮记忆，答案逐 token 以 SSE 推送，超时 120 秒。事件顺序：`sources`（引用来源 hits）→ `token`（逐个）→ `done`；出错时连接以错误结束，前端提示重问。
+
+```bash
+curl -N -X POST http://localhost:8080/api/ask-stream -H "Content-Type: application/json" -d '{"question":"请假超过3天找谁批？"}'
+```
+
 ### GET /api/documents —— 已入库文档清单
 
 ```bash
@@ -153,6 +161,7 @@ curl -X DELETE "http://localhost:8080/api/document?source=报销制度.txt"
 12. 扫描版 PDF（纯图片无文字层）上传返回 400“解析后无有效文本内容”，不静默存 0 块
 13. 上传 .exe 等非白名单后缀返回 400
 14. Java 单文件：上传 `src/main/java/com/example/kb/service/IngestService.java` 后 `GET /api/documents` 能列出且块数 = 方法数 + 1 个类头块；问“ingest 是怎么入库的”能答对并带文件与方法引用；语法错的 .java 报 400 且旧块还在
+15. 流式问答：POST /api/ask-stream 问知识库里有的问题，能逐 token 收到内容，sources 事件先到、done 最后到，答案与 /api/ask 一致并带引用；问资料里没有的问题，流式答案也是“资料里没找到”；maxResults=0 或 minScore=2 报 400
 
 ## 注意
 

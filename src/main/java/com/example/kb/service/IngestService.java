@@ -14,7 +14,6 @@ import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
-import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -25,6 +24,8 @@ import org.springframework.web.server.ResponseStatusException;
  */
 @Service
 public class IngestService {
+
+    private static final String TEXT_SUFFIX = ".txt";
 
     private final EmbeddingStoreIngestor embeddingStoreIngestor;
     private final EmbeddingStore<TextSegment> embeddingStore;
@@ -52,10 +53,9 @@ public class IngestService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件内容为空");
         }
         Metadata metadata = new Metadata();
-        metadata.put("source", fileName);
+        metadata.put(MetadataKeys.SOURCE, fileName);
         Document document;
-        if (fileName.endsWith(".txt")) {
-            // txt 直接用已读的 UTF-8 文本，快且结果最准
+        if (fileName.endsWith(TEXT_SUFFIX)) {
             document = Document.from(content, metadata);
         } else {
             document = parseWithTika(file, metadata);
@@ -67,13 +67,9 @@ public class IngestService {
         }
         // 同名先删旧块，保证重复上传不产生重复块。
         // TODO 该顺序非原子：入库中途失败（向量接口报错、断库）旧块已丢失；接入正式数据前需改为先入后删或加事务/备份
-        embeddingStore.removeAll(MetadataFilterBuilder.metadataKey("source").isEqualTo(fileName));
-        // 切块→向量化→存库由 EmbeddingStoreIngestor 一次完成，块数以入库后实际落库统计为准
+        documentManageService.removeBySource(fileName);
         embeddingStoreIngestor.ingest(document);
-        IngestResponse response = new IngestResponse();
-        response.setFile(fileName);
-        response.setChunks(documentManageService.countBySource(fileName));
-        return response;
+        return IngestResponse.of(fileName, documentManageService.countBySource(fileName));
     }
 
     /**
