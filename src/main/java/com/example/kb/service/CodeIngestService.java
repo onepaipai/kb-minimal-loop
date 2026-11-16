@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 
 import com.example.kb.dto.IngestResponse;
 import com.github.javaparser.ParseProblemException;
@@ -31,6 +32,9 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class CodeIngestService {
 
+    /** 单个方法块超过该字符数时按行拆成多块，避免超大方法一个块占满上下文 */
+    private static final int MAX_METHOD_CHARS = 8000;
+
     private final EmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final DocumentManageService documentManageService;
@@ -42,7 +46,7 @@ public class CodeIngestService {
         this.documentManageService = documentManageService;
     }
 
-    /** 先解析（语法错直接 400），成功后才删同名旧块再入库，失败时旧块不动。 */
+    /** 先解析（语法错直接 400），成功后先入新块再删旧块，失败时旧块不动。 */
     public IngestResponse ingestJava(MultipartFile file, String visibility) throws IOException {
         String fileName = file.getOriginalFilename();
         String source = new String(file.getBytes(), StandardCharsets.UTF_8);
@@ -63,19 +67,20 @@ public class CodeIngestService {
         String fullClassName = packageName.isEmpty()
                 ? primaryType.getNameAsString()
                 : packageName + "." + primaryType.getNameAsString();
-        List<TextSegment> segments = buildSegments(fileName, fullClassName, packageName, source, cu, visibility);
+        String batch = UUID.randomUUID().toString();
+        List<TextSegment> segments = buildSegments(fileName, fullClassName, packageName, source, cu, visibility, batch);
         if (segments.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件解析后没有可入库的代码块");
         }
-        documentManageService.removeBySource(fileName);
         Response<List<Embedding>> embeddingsResponse = embeddingModel.embedAll(segments);
         embeddingStore.addAll(embeddingsResponse.content(), segments);
+        documentManageService.removeReplaced(fileName, batch);
         return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility);
     }
 
     /** 类头块（第 1 行到第一个方法之前）加每个方法一块，块前加定位头。 */
     private List<TextSegment> buildSegments(String fileName, String fullClassName, String packageName,
-                                            String source, CompilationUnit cu, String visibility) {
+                                            String source, CompilationUnit cu, String visibility, String batch) {
         List<String> lines = List.of(source.split("\n", -1));
         List<MethodDeclaration> methods = cu.findAll(MethodDeclaration.class);
         List<Integer> beginLines = new ArrayList<>();
@@ -89,14 +94,37 @@ public class CodeIngestService {
         }
         List<TextSegment> segments = new ArrayList<>();
         segments.add(newSegment(fileName, fullClassName, packageName,
-                joinLines(lines, 1, firstMethodBegin - 1), "类头", "类头", visibility));
+                joinLines(lines, 1, firstMethodBegin - 1), "类头", "类头", visibility, batch));
         for (int i = 0; i < methods.size(); i++) {
             MethodDeclaration method = methods.get(i);
-            segments.add(newSegment(fileName, fullClassName, packageName,
-                    joinLines(lines, beginLines.get(i), endLines.get(i)),
-                    method.getNameAsString(), method.getDeclarationAsString(true, true, true), visibility));
+            // 嵌套类的方法归属最近一层类，不再都标成外层类
+            String methodClass = method.findAncestor(TypeDeclaration.class)
+                    .map(type -> packageName.isEmpty() ? type.getNameAsString() : packageName + "." + type.getNameAsString())
+                    .orElse(fullClassName);
+            for (String part : splitMethodText(lines, beginLines.get(i), endLines.get(i))) {
+                segments.add(newSegment(fileName, methodClass, packageName, part,
+                        method.getNameAsString(), method.getDeclarationAsString(true, true, true), visibility, batch));
+            }
         }
         return segments;
+    }
+
+    /** 超大方法按行拆成多段，每段不超过 MAX_METHOD_CHARS 字符（javadoc 留在第一段）。 */
+    private List<String> splitMethodText(List<String> lines, int beginLine, int endLine) {
+        List<String> parts = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (int i = beginLine; i <= endLine; i++) {
+            String line = lines.get(i - 1);
+            if (current.length() > 0 && current.length() + line.length() + 1 > MAX_METHOD_CHARS) {
+                parts.add(current.toString().stripTrailing());
+                current = new StringBuilder();
+            }
+            current.append(line).append("\n");
+        }
+        if (!current.isEmpty()) {
+            parts.add(current.toString().stripTrailing());
+        }
+        return parts;
     }
 
     /** 方法起始行：有 javadoc 时从 javadoc 起，含注释一起切。 */
@@ -127,11 +155,12 @@ public class CodeIngestService {
     }
 
     private TextSegment newSegment(String fileName, String fullClassName, String packageName,
-                                   String text, String method, String signature, String visibility) {
+                                   String text, String method, String signature, String visibility, String batch) {
         String header = "// 文件：" + fileName + " | 类：" + fullClassName + " | 方法：" + method;
         Metadata metadata = new Metadata();
         metadata.put(MetadataKeys.SOURCE, fileName);
         metadata.put(MetadataKeys.VISIBILITY, visibility);
+        metadata.put(MetadataKeys.BATCH, batch);
         metadata.put("kind", "code");
         metadata.put("package", packageName);
         metadata.put("class", fullClassName);

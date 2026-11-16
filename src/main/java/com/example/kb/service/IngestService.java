@@ -3,6 +3,7 @@ package com.example.kb.service;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 
 import com.example.kb.dto.IngestResponse;
 import dev.langchain4j.data.document.BlankDocumentException;
@@ -44,7 +45,7 @@ public class IngestService {
     }
 
     /**
-     * 按后缀分流解析入库：txt 直接按 UTF-8 读，其余交给 Tika 自动识别；同名文件先删旧块，重复上传即整体替换。
+     * 按后缀分流解析入库：txt 直接按 UTF-8 读，其余交给 Tika 自动识别；同名文件先入后删整体替换。
      */
     public IngestResponse ingest(MultipartFile file, String visibility) throws IOException {
         String fileName = file.getOriginalFilename();
@@ -55,6 +56,7 @@ public class IngestService {
         Metadata metadata = new Metadata();
         metadata.put(MetadataKeys.SOURCE, fileName);
         metadata.put(MetadataKeys.VISIBILITY, visibility);
+        metadata.put(MetadataKeys.BATCH, UUID.randomUUID().toString());
         Document document;
         if (fileName.endsWith(TEXT_SUFFIX)) {
             document = Document.from(content, metadata);
@@ -66,10 +68,9 @@ public class IngestService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "文件解析后无有效文本内容（可能为扫描版 PDF 或空文档，解析器不含 OCR）");
         }
-        // 同名先删旧块，保证重复上传不产生重复块。
-        // TODO 该顺序非原子：入库中途失败（向量接口报错、断库）旧块已丢失；接入正式数据前需改为先入后删或加事务/备份
-        documentManageService.removeBySource(fileName);
+        // 先入后删：新块入库成功才删旧块，入库中途失败（向量接口报错、断库）旧块不动
         embeddingStoreIngestor.ingest(document);
+        documentManageService.removeReplaced(fileName, metadata.getString(MetadataKeys.BATCH));
         return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility);
     }
 

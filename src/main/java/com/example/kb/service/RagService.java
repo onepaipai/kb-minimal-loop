@@ -3,9 +3,7 @@ package com.example.kb.service;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 import com.example.kb.common.Visibility;
 import com.example.kb.dto.AskRequest;
@@ -31,6 +29,7 @@ import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.filter.Filter;
 import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
+import dev.langchain4j.store.memory.chat.ChatMemoryStore;
 import org.springframework.stereotype.Service;
 
 /**
@@ -52,20 +51,26 @@ public class RagService {
     /** 每个会话最多保留的对话消息条数（约 10 轮） */
     private static final int MAX_MEMORY_MESSAGES = 20;
 
-    /** 会话记忆暂存内存：同一 sessionId 的不同部门用 department 隔离；TODO 生产环境需换持久化存储、增加过期清理，且 sessionId 需按登录用户隔离（当前由客户端任意指定） */
-    private final Map<String, ChatMemory> memoryMap = new ConcurrentHashMap<>();
+    /**
+     * 问答的作用域：由 Controller 在请求线程里从登录用户解析好再传进来（流式问答跑在独立线程，拿不到请求线程的 SecurityContext，必须显式传）。
+     * username 进会话键做隔离，department 是已按账号规则算好的生效部门。
+     */
+    public record AskScope(String username, String department) {
+    }
 
     private final EmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final ChatModel chatModel;
     private final StreamingChatModel streamingChatModel;
+    private final ChatMemoryStore chatMemoryStore;
 
     public RagService(EmbeddingModel embeddingModel, EmbeddingStore<TextSegment> embeddingStore,
-                      ChatModel chatModel, StreamingChatModel streamingChatModel) {
+                      ChatModel chatModel, StreamingChatModel streamingChatModel, ChatMemoryStore chatMemoryStore) {
         this.embeddingModel = embeddingModel;
         this.embeddingStore = embeddingStore;
         this.chatModel = chatModel;
         this.streamingChatModel = streamingChatModel;
+        this.chatMemoryStore = chatMemoryStore;
     }
 
     /** 流式问答的事件回调：Controller 接到 SseEmitter 上，顺序为 sources → token* → done / onError。 */
@@ -84,8 +89,8 @@ public class RagService {
     /**
      * 检索并回答：把检索到的块拼成带编号的资料段连同问题一起发给模型。
      */
-    public AskResponse ask(AskRequest request) {
-        PreparedAsk prepared = prepare(request);
+    public AskResponse ask(AskRequest request, AskScope scope) {
+        PreparedAsk prepared = prepare(request, scope);
         String answer = chatModel.chat(prepared.messages()).aiMessage().text();
         saveMemory(prepared, request.getQuestion(), answer);
 
@@ -100,8 +105,8 @@ public class RagService {
      * 流式检索问答：先发一次引用来源，再逐 token 发答案，最后发完成；出错走 onError。
      * 多轮记忆只在完整答案拿到后存一次，绝不在每个 token 到达时存。
      */
-    public void askStream(AskRequest request, StreamListener listener) {
-        PreparedAsk prepared = prepare(request);
+    public void askStream(AskRequest request, AskScope scope, StreamListener listener) {
+        PreparedAsk prepared = prepare(request, scope);
         listener.onSources(prepared.hits());
         StringBuilder answerBuilder = new StringBuilder();
         streamingChatModel.chat(prepared.messages(), new StreamingChatResponseHandler() {
@@ -131,7 +136,7 @@ public class RagService {
     /**
      * 共用准备：问题向量化 → 检索 → 拼带编号的资料段与问题 → 取会话历史，拼成发给模型的消息列表。
      */
-    private PreparedAsk prepare(AskRequest request) {
+    private PreparedAsk prepare(AskRequest request, AskScope scope) {
         Response<Embedding> embeddingResponse = embeddingModel.embed(request.getQuestion());
         int maxResults = MAX_RESULTS;
         if (request.getMaxResults() != null) {
@@ -146,7 +151,7 @@ public class RagService {
                 .maxResults(maxResults)
                 .minScore(minScore);
         // 权限过滤进 pgvector：只查全员可见 + 本部门的块，没权限的块连 prompt 都不进
-        String department = request.getDepartment();
+        String department = scope.department();
         Filter filter = department == null
                 ? MetadataFilterBuilder.metadataKey(MetadataKeys.VISIBILITY).isEqualTo(Visibility.ALL)
                 : MetadataFilterBuilder.metadataKey(MetadataKeys.VISIBILITY).isIn(Visibility.ALL, department);
@@ -177,12 +182,14 @@ public class RagService {
 
         ChatMemory chatMemory = null;
         if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
-            String memoryKey = request.getSessionId() + "|"
-                    + (request.getDepartment() == null ? "all-only" : request.getDepartment());
-            chatMemory = memoryMap.computeIfAbsent(memoryKey, id -> MessageWindowChatMemory.builder()
-                    .id(id)
+            // 会话键带用户名 + 部门：不同用户、不同部门各用各的历史；历史存在 chat_memory 表里，重启不丢，24 小时未更新由定时任务清理
+            String memoryKey = scope.username() + "|" + request.getSessionId() + "|"
+                    + (scope.department() == null ? "all-only" : scope.department());
+            chatMemory = MessageWindowChatMemory.builder()
+                    .id(memoryKey)
                     .maxMessages(MAX_MEMORY_MESSAGES)
-                    .build());
+                    .chatMemoryStore(chatMemoryStore)
+                    .build();
         }
         List<ChatMessage> messages = new ArrayList<>();
         messages.add(SystemMessage.from(SYSTEM_PROMPT));

@@ -6,6 +6,7 @@ import java.util.Set;
 
 import com.example.kb.common.Visibility;
 import com.example.kb.dto.IngestResponse;
+import com.example.kb.security.DepartmentScope;
 import com.example.kb.service.CodeIngestService;
 import com.example.kb.service.IngestService;
 import org.springframework.http.HttpStatus;
@@ -38,6 +39,7 @@ public class IngestController {
     public IngestResponse ingest(@RequestParam("file") MultipartFile file,
                                  @RequestParam(value = "visibility", required = false) String visibility) throws IOException {
         String effectiveVisibility = visibility == null ? Visibility.ALL : Visibility.normalize(visibility);
+        DepartmentScope.checkUploadVisibility(DepartmentScope.currentUser(), effectiveVisibility);
         String fileName = file.getOriginalFilename();
         String lowerName = fileName == null ? "" : fileName.toLowerCase(Locale.ROOT);
         if (SUPPORTED_SUFFIXES.stream().noneMatch(lowerName::endsWith)) {
