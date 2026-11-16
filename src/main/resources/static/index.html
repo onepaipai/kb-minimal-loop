@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知识库</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <h1>知识库</h1>
+  <div id="userBar" hidden>
+    <span id="userInfo"></span>
+    <button id="logoutBtn" type="button">退出</button>
+  </div>
+</header>
+<main>
+  <p id="message" class="message" hidden></p>
+
+  <section id="loginView" class="card">
+    <h2>登录</h2>
+    <form id="loginForm">
+      <label>用户名 <input id="loginUsername" type="text" autocomplete="username" required></label>
+      <label>密码 <input id="loginPassword" type="password" autocomplete="current-password" required></label>
+      <button type="submit">登录</button>
+    </form>
+  </section>
+
+  <div id="appView" hidden>
+    <section class="card">
+      <h2>问答</h2>
+      <form id="askForm">
+        <label>问题
+          <textarea id="question" rows="3" required placeholder="例如：请假超过3天找谁批？"></textarea>
+        </label>
+        <div class="row">
+          <label>会话 <input id="sessionId" type="text"></label>
+          <button id="newSessionBtn" type="button">新会话</button>
+        </div>
+        <div class="row">
+          <label>部门 <input id="askDepartment" type="text" placeholder="留空按当前账号"></label>
+          <label>只查这些文档 <input id="askSources" type="text" placeholder="逗号分隔，留空查全部"></label>
+        </div>
+        <div class="row">
+          <label class="inline"><input id="askStream" type="checkbox" checked> 流式输出</label>
+          <button type="submit">提问</button>
+        </div>
+      </form>
+      <div id="answer" class="answer" hidden></div>
+      <div id="hits"></div>
+    </section>
+
+    <section class="card">
+      <h2>上传文档</h2>
+      <form id="uploadForm">
+        <div class="row">
+          <input id="uploadFile" type="file" required>
+          <label>可见性 <input id="uploadVisibility" type="text" value="all" placeholder="all 或部门代号"></label>
+          <button type="submit">上传入库</button>
+        </div>
+      </form>
+      <p id="uploadResult" hidden></p>
+    </section>
+
+    <section class="card">
+      <h2>已入库文档</h2>
+      <div class="row">
+        <button id="refreshDocsBtn" type="button">刷新</button>
+        <button id="prevPageBtn" type="button">上一页</button>
+        <button id="nextPageBtn" type="button">下一页</button>
+        <span id="pageInfo"></span>
+      </div>
+      <table id="docsTable">
+        <thead><tr><th>文件</th><th>块数</th><th>可见性</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section id="adminSection" class="card" hidden>
+      <h2>用户管理（仅管理员）</h2>
+      <form id="createUserForm">
+        <div class="row">
+          <label>用户名 <input id="newUsername" type="text" required></label>
+          <label>密码 <input id="newPassword" type="password" required minlength="8"></label>
+          <label>角色
+            <select id="newRole">
+              <option value="USER">USER</option>
+              <option value="ADMIN">ADMIN</option>
+            </select>
+          </label>
+          <label>部门 <input id="newDepartment" type="text" placeholder="留空为管理员"></label>
+          <button type="submit">创建用户</button>
+        </div>
+      </form>
+      <table id="usersTable">
+        <thead><tr><th>用户名</th><th>角色</th><th>部门</th><th>创建于</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>改密码</h2>
+      <form id="changePasswordForm">
+        <div class="row">
+          <label>旧密码 <input id="oldPassword" type="password" required></label>
+          <label>新密码 <input id="newPassword2" type="password" required minlength="8"></label>
+          <button type="submit">修改</button>
+        </div>
+      </form>
+    </section>
+  </div>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

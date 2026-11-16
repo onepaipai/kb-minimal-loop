@@ -9,6 +9,7 @@
 - `common/exception/`：`GlobalExceptionHandler` 统一异常处理，`ErrorResponse` 统一错误体。
 - `dto/`：接口出入参，不做领域拆分（平铺最直观）。
 - `src/test/`：单元测试（`VisibilityTest`、`DepartmentScopeTest`，不依赖数据库）；CI 见 `.github/workflows/ci.yml`。
+- `src/main/resources/static/`：前端单页（`index.html`、`styles.css`、`app.js`，原生 JS + fetch，无构建步骤）；Spring Boot 默认 serving，`/` 打开即用，`/api/**` 之外的请求安全配置全部放行。
 
 ## 数据流
 
@@ -78,7 +79,6 @@ SELECT count(*) FROM chunk_embedding WHERE metadata->>'visibility' IS NULL;
 
 ## 已知缺口（生产化前仍需处理）
 
-- **无前端**：只有接口，调用方自己接（curl / 内部系统）。
 - **限流在内存**：单实例够用，多实例部署需换 Redis 之类的集中限流，否则每个实例各算各的。
 - **Token 无刷新机制**：JWT 有效期 8 小时，到期重新登录；正式使用可加 refresh token。
 - **无审计日志**：谁删了哪篇文档、谁建了用户，目前只在应用日志里有请求记录，没有结构化审计表。
