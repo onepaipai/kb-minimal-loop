@@ -3,6 +3,7 @@ package com.example.kb.service;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 
 import com.example.kb.dto.IngestResponse;
 import dev.langchain4j.data.document.BlankDocumentException;
@@ -14,7 +15,6 @@ import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
-import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -25,6 +25,8 @@ import org.springframework.web.server.ResponseStatusException;
  */
 @Service
 public class IngestService {
+
+    private static final String TEXT_SUFFIX = ".txt";
 
     private final EmbeddingStoreIngestor embeddingStoreIngestor;
     private final EmbeddingStore<TextSegment> embeddingStore;
@@ -43,19 +45,20 @@ public class IngestService {
     }
 
     /**
-     * 按后缀分流解析入库：txt 直接按 UTF-8 读，其余交给 Tika 自动识别；同名文件先删旧块，重复上传即整体替换。
+     * 按后缀分流解析入库：txt 直接按 UTF-8 读，其余交给 Tika 自动识别；同名文件先入后删整体替换。
      */
-    public IngestResponse ingest(MultipartFile file) throws IOException {
+    public IngestResponse ingest(MultipartFile file, String visibility) throws IOException {
         String fileName = file.getOriginalFilename();
         String content = new String(file.getBytes(), StandardCharsets.UTF_8);
         if (content.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件内容为空");
         }
         Metadata metadata = new Metadata();
-        metadata.put("source", fileName);
+        metadata.put(MetadataKeys.SOURCE, fileName);
+        metadata.put(MetadataKeys.VISIBILITY, visibility);
+        metadata.put(MetadataKeys.BATCH, UUID.randomUUID().toString());
         Document document;
-        if (fileName.endsWith(".txt")) {
-            // txt 直接用已读的 UTF-8 文本，快且结果最准
+        if (fileName.endsWith(TEXT_SUFFIX)) {
             document = Document.from(content, metadata);
         } else {
             document = parseWithTika(file, metadata);
@@ -65,19 +68,14 @@ public class IngestService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "文件解析后无有效文本内容（可能为扫描版 PDF 或空文档，解析器不含 OCR）");
         }
-        // 同名先删旧块，保证重复上传不产生重复块。
-        // TODO 该顺序非原子：入库中途失败（向量接口报错、断库）旧块已丢失；接入正式数据前需改为先入后删或加事务/备份
-        embeddingStore.removeAll(MetadataFilterBuilder.metadataKey("source").isEqualTo(fileName));
-        // 切块→向量化→存库由 EmbeddingStoreIngestor 一次完成，块数以入库后实际落库统计为准
+        // 先入后删：新块入库成功才删旧块，入库中途失败（向量接口报错、断库）旧块不动
         embeddingStoreIngestor.ingest(document);
-        IngestResponse response = new IngestResponse();
-        response.setFile(fileName);
-        response.setChunks(documentManageService.countBySource(fileName));
-        return response;
+        documentManageService.removeReplaced(fileName, metadata.getString(MetadataKeys.BATCH));
+        return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility);
     }
 
     /**
-     * Tika 流式解析并重建 Document，手动补 source 元数据（Tika 不加，清单/删除/定向检索都依赖它）。
+     * Tika 流式解析并重建 Document，手动补 source/visibility 元数据（Tika 不加，清单/删除/定向检索与权限过滤都依赖它）。
      */
     private Document parseWithTika(MultipartFile file, Metadata metadata) throws IOException {
         try (InputStream inputStream = file.getInputStream()) {
