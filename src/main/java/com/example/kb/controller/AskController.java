@@ -8,7 +8,6 @@ import com.example.kb.common.Visibility;
 import com.example.kb.dto.AskRequest;
 import com.example.kb.dto.AskResponse;
 import com.example.kb.dto.ReferenceHit;
-import com.example.kb.security.DepartmentScope;
 import com.example.kb.service.RagService;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -40,26 +39,25 @@ public class AskController {
     @PostMapping("/ask")
     public AskResponse ask(@RequestBody AskRequest request) {
         validateAskRequest(request);
-        return ragService.ask(request, DepartmentScope.askScope(DepartmentScope.currentUser(), request.getDepartment()));
+        return ragService.ask(request);
     }
 
     /**
      * 流式问答：与 /api/ask 同一套检索与校验，答案逐 token 以 SSE 推送。
      * 事件顺序：sources（引用来源）→ token（逐个）→ done；出错时 completeWithError。
-     * 流式调用跑在独立线程，接口立即返回 emitter；作用域在请求线程里算好传进去。
+     * 流式调用跑在独立线程，接口立即返回 emitter。
      */
     @PostMapping(value = "/ask-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter askStream(@RequestBody AskRequest request) {
         validateAskRequest(request);
-        RagService.AskScope scope = DepartmentScope.askScope(DepartmentScope.currentUser(), request.getDepartment());
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MILLIS);
-        CompletableFuture.runAsync(() -> streamTo(request, scope, emitter));
+        CompletableFuture.runAsync(() -> streamTo(request, emitter));
         return emitter;
     }
 
-    private void streamTo(AskRequest request, RagService.AskScope scope, SseEmitter emitter) {
+    private void streamTo(AskRequest request, SseEmitter emitter) {
         try {
-            ragService.askStream(request, scope, sseListener(emitter));
+            ragService.askStream(request, sseListener(emitter));
         } catch (Exception e) {
             emitter.completeWithError(e);
         }

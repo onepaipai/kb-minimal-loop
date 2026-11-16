@@ -6,7 +6,7 @@
 - Neon 建好项目和数据库，连接串使用**直连端点**（不要 `-pooler` 端点）
 - DeepSeek 平台 API Key、阿里云 DashScope API Key
 
-## 环境变量（8 个，模型与数据库的 5 个必填，其余 3 个可选）
+## 环境变量（5 个，全部必填，不写死进代码）
 
 | 变量 | 说明 | 示例 |
 | --- | --- | --- |
@@ -15,9 +15,6 @@
 | `DB_URL` | Neon JDBC 直连地址 | `jdbc:postgresql://ep-xxx.ap-southeast-1.aws.neon.tech/neondb?sslmode=require` |
 | `DB_USER` | 数据库用户名 | `neondb_owner` |
 | `DB_PASSWORD` | 数据库密码 | `******` |
-| `JWT_SECRET` | JWT 签名密钥，至少 32 个字符；不配则启动时随机生成（重启后旧 Token 失效） | `换成你自己的长随机串` |
-| `ADMIN_USERNAME` | 初始管理员账号，默认 `admin` | `admin` |
-| `ADMIN_PASSWORD` | 初始管理员密码；不配则随机生成并打在启动日志里，登录后立即修改 | `******` |
 
 ## 启动
 
@@ -29,8 +26,6 @@ export DASHSCOPE_API_KEY=sk-xxx
 export DB_URL='jdbc:postgresql://ep-xxx.xxx.aws.neon.tech/neondb?sslmode=require'
 export DB_USER=neondb_owner
 export DB_PASSWORD=xxx
-export JWT_SECRET='换成你自己的长随机串'
-export ADMIN_PASSWORD='初始管理员密码'
 export JAVA_HOME=/d/Java/Java17
 mvn clean spring-boot:run
 ```
@@ -43,22 +38,10 @@ set DASHSCOPE_API_KEY=sk-xxx
 set DB_URL=jdbc:postgresql://ep-xxx.xxx.aws.neon.tech/neondb?sslmode=require
 set DB_USER=neondb_owner
 set DB_PASSWORD=xxx
-set JWT_SECRET=换成你自己的长随机串
-set ADMIN_PASSWORD=初始管理员密码
 mvn clean spring-boot:run
 ```
 
-启动时 Spring 自动执行 `schema.sql`（建 extension、建表、建 HNSW 索引，全部 `IF NOT EXISTS`，可重复执行；`chat_memory` 与 `app_user` 两张表也是这里建的）。
-
-## 首次登录
-
-启动后库里没有管理员时自动播种一个（见上表 `ADMIN_USERNAME`/`ADMIN_PASSWORD`）：
-
-```bash
-curl -X POST http://localhost:8080/api/auth/login -H "Content-Type: application/json" -d '{"username":"admin","password":"<初始密码>"}'
-```
-
-拿到 `token` 后每个请求带 `Authorization: Bearer <token>`（有效期 8 小时）；登录后立即调 `POST /api/auth/change-password` 改掉初始密码，再用管理员账号创建普通用户（见 [接口](api.md)）。
+启动时 Spring 自动执行 `schema.sql`（建 extension、建表、建 HNSW 索引，全部 `IF NOT EXISTS`，可重复执行）。
 
 ## 运行期配置
 
