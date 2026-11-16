@@ -8,191 +8,198 @@
 <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-<div class="page">
-  <header class="navbar navbar-expand-md d-print-none">
-    <div class="container-xl">
-      <h1 class="navbar-brand navbar-brand-autodark">知识库</h1>
-      <div id="userBar" class="navbar-nav flex-row order-md-last" hidden>
-        <span id="userInfo" class="nav-link"></span>
-        <button id="logoutBtn" type="button" class="btn btn-outline-danger btn-sm">退出</button>
-      </div>
-    </div>
-  </header>
-  <div class="page-wrapper">
-    <div class="page-body">
-      <div class="container-xl">
-        <div id="message" class="alert alert-warning" role="alert" hidden></div>
-
-        <section id="loginView" class="card">
-          <div class="card-body">
-            <h2 class="card-title">登录</h2>
-            <form id="loginForm">
-              <div class="mb-3">
-                <label class="form-label" for="loginUsername">用户名</label>
-                <input id="loginUsername" class="form-control" type="text" autocomplete="username" required>
-              </div>
-              <div class="mb-3">
-                <label class="form-label" for="loginPassword">密码</label>
-                <input id="loginPassword" class="form-control" type="password" autocomplete="current-password" required>
-              </div>
-              <button type="submit" class="btn btn-primary">登录</button>
-            </form>
-          </div>
-        </section>
-
-        <div id="appView" hidden>
-          <section class="card">
-            <div class="card-header">
-              <h2 class="card-title">问答</h2>
-            </div>
-            <div class="card-body">
-              <form id="askForm">
-                <div class="mb-3">
-                  <label class="form-label" for="question">问题</label>
-                  <textarea id="question" class="form-control" rows="3" required placeholder="例如：请假超过3天找谁批？"></textarea>
-                </div>
-                <div class="row g-2 mb-3">
-                  <div class="col-md-8">
-                    <label class="form-label" for="sessionId">会话</label>
-                    <input id="sessionId" class="form-control" type="text">
-                  </div>
-                  <div class="col-md-4 d-flex align-items-end">
-                    <button id="newSessionBtn" type="button" class="btn btn-outline-secondary">新会话</button>
-                  </div>
-                </div>
-                <div class="row g-2 mb-3">
-                  <div class="col-md-6">
-                    <label class="form-label" for="askDepartment">部门</label>
-                    <input id="askDepartment" class="form-control" type="text" placeholder="留空按当前账号">
-                  </div>
-                  <div class="col-md-6">
-                    <label class="form-label" for="askSources">只查这些文档</label>
-                    <input id="askSources" class="form-control" type="text" placeholder="逗号分隔，留空查全部">
-                  </div>
-                </div>
-                <div class="d-flex align-items-center gap-3">
-                  <label class="form-check">
-                    <input id="askStream" class="form-check-input" type="checkbox" checked>
-                    <span class="form-check-label">流式输出</span>
-                  </label>
-                  <button type="submit" class="btn btn-primary">提问</button>
-                </div>
-              </form>
-              <div id="answer" class="answer" hidden></div>
-              <div id="hits"></div>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="card-header">
-              <h2 class="card-title">上传文档</h2>
-            </div>
-            <div class="card-body">
-              <form id="uploadForm">
-                <div class="row g-2 align-items-end">
-                  <div class="col-md-6">
-                    <label class="form-label" for="uploadFile">文件</label>
-                    <input id="uploadFile" class="form-control" type="file" required>
-                  </div>
-                  <div class="col-md-3">
-                    <label class="form-label" for="uploadVisibility">可见性</label>
-                    <input id="uploadVisibility" class="form-control" type="text" value="all" placeholder="all 或部门代号">
-                  </div>
-                  <div class="col-md-3">
-                    <button type="submit" class="btn btn-primary w-100">上传入库</button>
-                  </div>
-                </div>
-              </form>
-              <p id="uploadResult" class="text-secondary mt-2 mb-0" hidden></p>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="card-header">
-              <h2 class="card-title">已入库文档</h2>
-            </div>
-            <div class="card-body">
-              <div class="d-flex align-items-center gap-2 mb-3">
-                <button id="refreshDocsBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
-                <button id="prevPageBtn" type="button" class="btn btn-outline-secondary btn-sm">上一页</button>
-                <button id="nextPageBtn" type="button" class="btn btn-outline-secondary btn-sm">下一页</button>
-                <span id="pageInfo" class="text-secondary"></span>
-              </div>
-              <div class="table-responsive">
-                <table id="docsTable" class="table table-vcenter">
-                  <thead><tr><th>文件</th><th>块数</th><th>可见性</th><th></th></tr></thead>
-                  <tbody></tbody>
-                </table>
-              </div>
-            </div>
-          </section>
-
-          <section id="adminSection" class="card" hidden>
-            <div class="card-header">
-              <h2 class="card-title">用户管理（仅管理员）</h2>
-            </div>
-            <div class="card-body">
-              <form id="createUserForm">
-                <div class="row g-2 align-items-end">
-                  <div class="col-md-3">
-                    <label class="form-label" for="newUsername">用户名</label>
-                    <input id="newUsername" class="form-control" type="text" required>
-                  </div>
-                  <div class="col-md-3">
-                    <label class="form-label" for="newPassword">密码</label>
-                    <input id="newPassword" class="form-control" type="password" required minlength="8">
-                  </div>
-                  <div class="col-md-2">
-                    <label class="form-label" for="newRole">角色</label>
-                    <select id="newRole" class="form-select">
-                      <option value="USER">USER</option>
-                      <option value="ADMIN">ADMIN</option>
-                    </select>
-                  </div>
-                  <div class="col-md-2">
-                    <label class="form-label" for="newDepartment">部门</label>
-                    <input id="newDepartment" class="form-control" type="text" placeholder="留空为管理员">
-                  </div>
-                  <div class="col-md-2">
-                    <button type="submit" class="btn btn-primary w-100">创建用户</button>
-                  </div>
-                </div>
-              </form>
-              <div class="table-responsive mt-3">
-                <table id="usersTable" class="table table-vcenter">
-                  <thead><tr><th>用户名</th><th>角色</th><th>部门</th><th>创建于</th></tr></thead>
-                  <tbody></tbody>
-                </table>
-              </div>
-            </div>
-          </section>
-
-          <section class="card">
-            <div class="card-header">
-              <h2 class="card-title">改密码</h2>
-            </div>
-            <div class="card-body">
-              <form id="changePasswordForm">
-                <div class="row g-2 align-items-end">
-                  <div class="col-md-5">
-                    <label class="form-label" for="oldPassword">旧密码</label>
-                    <input id="oldPassword" class="form-control" type="password" required>
-                  </div>
-                  <div class="col-md-5">
-                    <label class="form-label" for="newPassword2">新密码</label>
-                    <input id="newPassword2" class="form-control" type="password" required minlength="8">
-                  </div>
-                  <div class="col-md-2">
-                    <button type="submit" class="btn btn-primary w-100">修改</button>
-                  </div>
-                </div>
-              </form>
-            </div>
-          </section>
+<div id="loginView" class="login-wrap" hidden>
+  <div class="card login-card">
+    <div class="card-body">
+      <h1 class="login-title">知识库</h1>
+      <p class="text-secondary">企业文档与代码知识库</p>
+      <form id="loginForm">
+        <div class="mb-3">
+          <label class="form-label" for="loginUsername">用户名</label>
+          <input id="loginUsername" class="form-control" type="text" autocomplete="username" required>
         </div>
-      </div>
+        <div class="mb-3">
+          <label class="form-label" for="loginPassword">密码</label>
+          <input id="loginPassword" class="form-control" type="password" autocomplete="current-password" required>
+        </div>
+        <button type="submit" class="btn btn-primary w-100">登录</button>
+      </form>
     </div>
   </div>
+</div>
+
+<div id="appView" class="chat-shell" hidden>
+  <aside class="chat-sidebar" id="sidebar">
+    <div class="sidebar-brand">知识库</div>
+    <button id="newSessionBtn" type="button" class="btn btn-primary w-100">+ 新对话</button>
+    <nav id="sessionList" class="session-list"></nav>
+    <div class="sidebar-nav">
+      <button type="button" class="sidebar-link active" data-view="chat">对话</button>
+      <button type="button" class="sidebar-link" data-view="manage">文档管理</button>
+      <button type="button" class="sidebar-link" data-view="admin" id="adminNavBtn" hidden>用户管理</button>
+      <button type="button" class="sidebar-link" data-view="password">改密码</button>
+    </div>
+    <div class="sidebar-user">
+      <span id="userInfo"></span>
+      <button id="logoutBtn" type="button" class="btn btn-outline-light btn-sm">退出</button>
+    </div>
+  </aside>
+
+  <main class="chat-main">
+    <div class="chat-topbar">
+      <button id="menuBtn" type="button" class="btn btn-outline-secondary btn-sm d-md-none">☰</button>
+      <span id="viewTitle" class="topbar-title">对话</span>
+    </div>
+    <div id="message" class="alert alert-warning m-3 mb-0" role="alert" hidden></div>
+
+    <section id="chatView" class="chat-view">
+      <div id="messages" class="messages"></div>
+      <div class="composer">
+        <details class="composer-options">
+          <summary>检索选项</summary>
+          <div class="row g-2 mt-1">
+            <div class="col-6">
+              <label class="form-label" for="askDepartment">部门</label>
+              <input id="askDepartment" class="form-control" type="text" placeholder="留空按当前账号">
+            </div>
+            <div class="col-6">
+              <label class="form-label" for="askSources">只查这些文档</label>
+              <input id="askSources" class="form-control" type="text" placeholder="逗号分隔，留空查全部">
+            </div>
+            <div class="col-12">
+              <label class="form-check">
+                <input id="askStream" class="form-check-input" type="checkbox" checked>
+                <span class="form-check-label">流式输出</span>
+              </label>
+            </div>
+          </div>
+        </details>
+        <form id="askForm" class="composer-form">
+          <textarea id="question" class="form-control" rows="2" required placeholder="输入问题，Enter 发送，Shift+Enter 换行"></textarea>
+          <button type="submit" class="btn btn-primary">发送</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="manageView" class="manage-view" hidden>
+      <div class="manage-inner">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">上传文档</h2>
+          </div>
+          <div class="card-body">
+            <form id="uploadForm">
+              <div class="row g-2 align-items-end">
+                <div class="col-md-6">
+                  <label class="form-label" for="uploadFile">文件</label>
+                  <input id="uploadFile" class="form-control" type="file" required>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label" for="uploadVisibility">可见性</label>
+                  <input id="uploadVisibility" class="form-control" type="text" value="all" placeholder="all 或部门代号">
+                </div>
+                <div class="col-md-3">
+                  <button type="submit" class="btn btn-primary w-100">上传入库</button>
+                </div>
+              </div>
+            </form>
+            <p id="uploadResult" class="text-secondary mt-2 mb-0" hidden></p>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">已入库文档</h2>
+          </div>
+          <div class="card-body">
+            <div class="d-flex align-items-center gap-2 mb-3">
+              <button id="refreshDocsBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+              <button id="prevPageBtn" type="button" class="btn btn-outline-secondary btn-sm">上一页</button>
+              <button id="nextPageBtn" type="button" class="btn btn-outline-secondary btn-sm">下一页</button>
+              <span id="pageInfo" class="text-secondary"></span>
+            </div>
+            <div class="table-responsive">
+              <table id="docsTable" class="table table-vcenter">
+                <thead><tr><th>文件</th><th>块数</th><th>可见性</th><th></th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="adminView" class="manage-view" hidden>
+      <div class="manage-inner">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">用户管理（仅管理员）</h2>
+          </div>
+          <div class="card-body">
+            <form id="createUserForm">
+              <div class="row g-2 align-items-end">
+                <div class="col-md-3">
+                  <label class="form-label" for="newUsername">用户名</label>
+                  <input id="newUsername" class="form-control" type="text" required>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label" for="newPassword">密码</label>
+                  <input id="newPassword" class="form-control" type="password" required minlength="8">
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label" for="newRole">角色</label>
+                  <select id="newRole" class="form-select">
+                    <option value="USER">USER</option>
+                    <option value="ADMIN">ADMIN</option>
+                  </select>
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label" for="newDepartment">部门</label>
+                  <input id="newDepartment" class="form-control" type="text" placeholder="留空为管理员">
+                </div>
+                <div class="col-md-2">
+                  <button type="submit" class="btn btn-primary w-100">创建用户</button>
+                </div>
+              </div>
+            </form>
+            <div class="table-responsive mt-3">
+              <table id="usersTable" class="table table-vcenter">
+                <thead><tr><th>用户名</th><th>角色</th><th>部门</th><th>创建于</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="passwordView" class="manage-view" hidden>
+      <div class="manage-inner">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">改密码</h2>
+          </div>
+          <div class="card-body">
+            <form id="changePasswordForm">
+              <div class="row g-2 align-items-end">
+                <div class="col-md-5">
+                  <label class="form-label" for="oldPassword">旧密码</label>
+                  <input id="oldPassword" class="form-control" type="password" required>
+                </div>
+                <div class="col-md-5">
+                  <label class="form-label" for="newPassword2">新密码</label>
+                  <input id="newPassword2" class="form-control" type="password" required minlength="8">
+                </div>
+                <div class="col-md-2">
+                  <button type="submit" class="btn btn-primary w-100">修改</button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
 </div>
 <script src="app.js"></script>
 </body>

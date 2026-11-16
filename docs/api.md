@@ -4,7 +4,7 @@
 
 ## 前端页面
 
-浏览器打开 `http://localhost:8080/` 即可用：登录、问答（默认流式，可关）、上传文档、清单与删除（仅管理员可见删除按钮）、用户管理（仅管理员）、改密码。Token 存浏览器 localStorage，8 小时有效，过期后接口返回 401，前端自动回登录页。静态文件在 `src/main/resources/static/`（`index.html`、`styles.css`、`app.js`，无构建步骤）；样式用 Tabler v1.7.5（MIT，GitHub tabler/tabler 的 release 构建，`tabler.min.css` 直接放在 static/ 里本地引入，不依赖外网）；`/api/**` 之外的请求全部放行，所以页面不需要登录就能打开，调接口时才要 Token。
+浏览器打开 `http://localhost:8080/` 即可用：聊天式界面，左侧深色边栏是会话列表（新建、切换、删除对话，记录只存本浏览器）与功能导航，中央是对话气泡（默认流式逐字出，引用分数与原文显示在回答下方），上传文档、清单与删除、用户管理、改密码在侧边栏切视图打开。输入框 Enter 发送、Shift+Enter 换行。Token 存浏览器 localStorage，8 小时有效，过期后接口返回 401，前端自动回登录页。静态文件在 `src/main/resources/static/`（`index.html`、`styles.css`、`app.js`，无构建步骤）；样式用 Tabler v1.7.5（MIT，GitHub tabler/tabler 的 release 构建，`tabler.min.css` 直接放在 static/ 里本地引入，不依赖外网）；`/api/**` 之外的请求全部放行，所以页面不需要登录就能打开，调接口时才要 Token。
 
 ## 鉴权（除登录外所有接口都要带 Token）
 
