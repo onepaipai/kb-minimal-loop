@@ -22,11 +22,12 @@ body { margin: 0; background: var(--tblr-bg-surface-secondary, #f4f5f7); }
   justify-content: center;
   border-radius: 12px;
   background: var(--tblr-primary, #206bc4);
+  color: #fff;
   font-size: 22px;
   font-weight: 700;
   margin-bottom: 20px;
 }
-.login-brand h1 { font-size: 30px; margin: 0 0 8px; }
+.login-brand h1 { font-size: 30px; margin: 0 0 8px; color: #fff; }
 .login-brand-sub { color: rgba(255, 255, 255, .72); font-size: 16px; margin: 0 0 28px; }
 .login-features { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 12px; font-size: 15px; }
 .login-features li::before { content: "✓"; margin-right: 10px; color: #7fb0e8; }
