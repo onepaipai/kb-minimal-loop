@@ -1,5 +1,6 @@
 package com.example.kb.controller;
 
+import com.example.kb.common.Visibility;
 import com.example.kb.dto.DeleteDocumentResponse;
 import com.example.kb.dto.DocumentListResponse;
 import com.example.kb.service.DocumentManageService;
@@ -20,10 +21,11 @@ public class DocumentController {
         this.documentManageService = documentManageService;
     }
 
-    /** 已入库文档清单：source 与块数。 */
+    /** 已入库文档清单：source、块数与 visibility；department 可选，不传只列全员可见的。 */
     @GetMapping("/documents")
-    public DocumentListResponse documents() {
-        return documentManageService.listDocuments();
+    public DocumentListResponse documents(@RequestParam(value = "department", required = false) String department) {
+        String effectiveDepartment = department == null ? null : Visibility.normalize(department);
+        return documentManageService.listDocuments(effectiveDepartment);
     }
 
     /** 删除指定文档的全部块。 */

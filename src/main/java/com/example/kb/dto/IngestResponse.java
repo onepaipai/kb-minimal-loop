@@ -7,11 +7,13 @@ public class IngestResponse {
 
     private String file;
     private int chunks;
+    private String visibility;
 
-    public static IngestResponse of(String file, int chunks) {
+    public static IngestResponse of(String file, int chunks, String visibility) {
         IngestResponse response = new IngestResponse();
         response.setFile(file);
         response.setChunks(chunks);
+        response.setVisibility(visibility);
         return response;
     }
 
@@ -29,5 +31,13 @@ public class IngestResponse {
 
     public void setChunks(int chunks) {
         this.chunks = chunks;
+    }
+
+    public String getVisibility() {
+        return visibility;
+    }
+
+    public void setVisibility(String visibility) {
+        this.visibility = visibility;
     }
 }

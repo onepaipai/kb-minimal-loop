@@ -53,6 +53,25 @@ JavaParser 只找边界，按 `Range` 行号切原文保留注释与格式：一
 | 元数据 | `COMBINED_JSONB` 模式，对应 `schema.sql` 的 `metadata JSONB` 列；`source` 为文件名，是清单/删除/定向检索的键 |
 | Tika | 只用 `langchain4j-document-parser-apache-tika`（内嵌 Tika 3.2.3），严禁 Tika 4.x——改了 `Parser.parse` 签名，编译能过、运行时 `NoSuchMethodError` |
 
+## 权限过滤（第一版）
+
+- 模型：一篇文档一个 `visibility`，`all`（全员可见，默认）或一个部门代号；一次问答只带一个部门。没有登录、没有 Spring Security/JWT、没有多部门和按人 ACL，那些是下一版的事。
+- 入库时打标（`POST /api/ingest` 的 `visibility` 参数），每个块的 metadata 都写 `visibility`；问答与清单按它过滤，删除不管权限。
+- 会话记忆按 `sessionId + "|" + department` 隔离（不传 department 记作 `all-only`），同一 sessionId、不同部门各用各的历史；但 `sessionId` 本身仍是客户端任意传的，猜到就能读别人历史，第一版不解决这个。
+
+### 旧数据回填（必做，否则旧文档查不到）
+
+已入库的块没有 `visibility` 字段，权限过滤会把它们漏掉。先在 Neon 上核对条数，再回填：
+
+```sql
+SELECT count(*) FROM chunk_embedding WHERE metadata->>'visibility' IS NULL;
+UPDATE chunk_embedding SET metadata = jsonb_set(COALESCE(metadata,'{}'::jsonb), '{visibility}', '"all"')
+WHERE metadata->>'visibility' IS NULL;
+SELECT count(*) FROM chunk_embedding WHERE metadata->>'visibility' IS NULL;
+```
+
+回填后第二条应为 0。
+
 ## 已知缺口（生产化前必处理）
 
 - **无鉴权**：接口谁都能调；正式使用需加鉴权与限流，`sessionId` 按登录用户隔离并换集中存储。

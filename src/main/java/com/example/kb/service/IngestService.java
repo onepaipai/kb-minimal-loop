@@ -46,7 +46,7 @@ public class IngestService {
     /**
      * 按后缀分流解析入库：txt 直接按 UTF-8 读，其余交给 Tika 自动识别；同名文件先删旧块，重复上传即整体替换。
      */
-    public IngestResponse ingest(MultipartFile file) throws IOException {
+    public IngestResponse ingest(MultipartFile file, String visibility) throws IOException {
         String fileName = file.getOriginalFilename();
         String content = new String(file.getBytes(), StandardCharsets.UTF_8);
         if (content.isBlank()) {
@@ -54,6 +54,7 @@ public class IngestService {
         }
         Metadata metadata = new Metadata();
         metadata.put(MetadataKeys.SOURCE, fileName);
+        metadata.put(MetadataKeys.VISIBILITY, visibility);
         Document document;
         if (fileName.endsWith(TEXT_SUFFIX)) {
             document = Document.from(content, metadata);
@@ -69,11 +70,11 @@ public class IngestService {
         // TODO 该顺序非原子：入库中途失败（向量接口报错、断库）旧块已丢失；接入正式数据前需改为先入后删或加事务/备份
         documentManageService.removeBySource(fileName);
         embeddingStoreIngestor.ingest(document);
-        return IngestResponse.of(fileName, documentManageService.countBySource(fileName));
+        return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility);
     }
 
     /**
-     * Tika 流式解析并重建 Document，手动补 source 元数据（Tika 不加，清单/删除/定向检索都依赖它）。
+     * Tika 流式解析并重建 Document，手动补 source/visibility 元数据（Tika 不加，清单/删除/定向检索与权限过滤都依赖它）。
      */
     private Document parseWithTika(MultipartFile file, Metadata metadata) throws IOException {
         try (InputStream inputStream = file.getInputStream()) {

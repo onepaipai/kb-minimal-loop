@@ -4,6 +4,7 @@ package com.example.kb.service;
 final class MetadataKeys {
 
     static final String SOURCE = "source";
+    static final String VISIBILITY = "visibility";
 
     private MetadataKeys() {
     }

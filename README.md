@@ -48,8 +48,10 @@ src/main/java/com/example/kb/
 │   ├── RagService.java                # 检索问答（整段 + 流式共用 prepare）
 │   ├── DocumentManageService.java     # 文档清单、删除、按 source 删块
 │   └── MetadataKeys.java              # 块元数据键集中定义
-├── common/exception/                  # 统一异常处理与错误体
-│   ├── GlobalExceptionHandler.java
-│   └── ErrorResponse.java
+├── common/                            # 跨层共用
+│   ├── Visibility.java                # 可见性 / 部门代号：all 或小写代号，入口统一校验
+│   └── exception/                     # 统一异常处理与错误体
+│       ├── GlobalExceptionHandler.java
+│       └── ErrorResponse.java
 └── dto/                               # 接口出入参
 ```

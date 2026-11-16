@@ -43,7 +43,7 @@ public class CodeIngestService {
     }
 
     /** 先解析（语法错直接 400），成功后才删同名旧块再入库，失败时旧块不动。 */
-    public IngestResponse ingestJava(MultipartFile file) throws IOException {
+    public IngestResponse ingestJava(MultipartFile file, String visibility) throws IOException {
         String fileName = file.getOriginalFilename();
         String source = new String(file.getBytes(), StandardCharsets.UTF_8);
         if (source.isBlank()) {
@@ -63,19 +63,19 @@ public class CodeIngestService {
         String fullClassName = packageName.isEmpty()
                 ? primaryType.getNameAsString()
                 : packageName + "." + primaryType.getNameAsString();
-        List<TextSegment> segments = buildSegments(fileName, fullClassName, packageName, source, cu);
+        List<TextSegment> segments = buildSegments(fileName, fullClassName, packageName, source, cu, visibility);
         if (segments.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件解析后没有可入库的代码块");
         }
         documentManageService.removeBySource(fileName);
         Response<List<Embedding>> embeddingsResponse = embeddingModel.embedAll(segments);
         embeddingStore.addAll(embeddingsResponse.content(), segments);
-        return IngestResponse.of(fileName, documentManageService.countBySource(fileName));
+        return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility);
     }
 
     /** 类头块（第 1 行到第一个方法之前）加每个方法一块，块前加定位头。 */
     private List<TextSegment> buildSegments(String fileName, String fullClassName, String packageName,
-                                            String source, CompilationUnit cu) {
+                                            String source, CompilationUnit cu, String visibility) {
         List<String> lines = List.of(source.split("\n", -1));
         List<MethodDeclaration> methods = cu.findAll(MethodDeclaration.class);
         List<Integer> beginLines = new ArrayList<>();
@@ -89,12 +89,12 @@ public class CodeIngestService {
         }
         List<TextSegment> segments = new ArrayList<>();
         segments.add(newSegment(fileName, fullClassName, packageName,
-                joinLines(lines, 1, firstMethodBegin - 1), "类头", "类头"));
+                joinLines(lines, 1, firstMethodBegin - 1), "类头", "类头", visibility));
         for (int i = 0; i < methods.size(); i++) {
             MethodDeclaration method = methods.get(i);
             segments.add(newSegment(fileName, fullClassName, packageName,
                     joinLines(lines, beginLines.get(i), endLines.get(i)),
-                    method.getNameAsString(), method.getDeclarationAsString(true, true, true)));
+                    method.getNameAsString(), method.getDeclarationAsString(true, true, true), visibility));
         }
         return segments;
     }
@@ -127,10 +127,11 @@ public class CodeIngestService {
     }
 
     private TextSegment newSegment(String fileName, String fullClassName, String packageName,
-                                   String text, String method, String signature) {
+                                   String text, String method, String signature, String visibility) {
         String header = "// 文件：" + fileName + " | 类：" + fullClassName + " | 方法：" + method;
         Metadata metadata = new Metadata();
         metadata.put(MetadataKeys.SOURCE, fileName);
+        metadata.put(MetadataKeys.VISIBILITY, visibility);
         metadata.put("kind", "code");
         metadata.put("package", packageName);
         metadata.put("class", fullClassName);

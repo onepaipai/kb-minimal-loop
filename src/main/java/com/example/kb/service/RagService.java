@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import com.example.kb.common.Visibility;
 import com.example.kb.dto.AskRequest;
 import com.example.kb.dto.AskResponse;
 import com.example.kb.dto.ReferenceHit;
@@ -28,6 +29,7 @@ import dev.langchain4j.store.embedding.EmbeddingMatch;
 import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
+import dev.langchain4j.store.embedding.filter.Filter;
 import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 import org.springframework.stereotype.Service;
 
@@ -50,7 +52,7 @@ public class RagService {
     /** 每个会话最多保留的对话消息条数（约 10 轮） */
     private static final int MAX_MEMORY_MESSAGES = 20;
 
-    /** 会话记忆暂存内存：TODO 生产环境需换持久化存储、增加过期清理，且 sessionId 需按登录用户隔离（当前由客户端任意指定） */
+    /** 会话记忆暂存内存：同一 sessionId 的不同部门用 department 隔离；TODO 生产环境需换持久化存储、增加过期清理，且 sessionId 需按登录用户隔离（当前由客户端任意指定） */
     private final Map<String, ChatMemory> memoryMap = new ConcurrentHashMap<>();
 
     private final EmbeddingModel embeddingModel;
@@ -143,10 +145,16 @@ public class RagService {
                 .queryEmbedding(embeddingResponse.content())
                 .maxResults(maxResults)
                 .minScore(minScore);
+        // 权限过滤进 pgvector：只查全员可见 + 本部门的块，没权限的块连 prompt 都不进
+        String department = request.getDepartment();
+        Filter filter = department == null
+                ? MetadataFilterBuilder.metadataKey(MetadataKeys.VISIBILITY).isEqualTo(Visibility.ALL)
+                : MetadataFilterBuilder.metadataKey(MetadataKeys.VISIBILITY).isIn(Visibility.ALL, department);
         if (request.getSources() != null && !request.getSources().isEmpty()) {
-            searchRequestBuilder.filter(MetadataFilterBuilder.metadataKey(MetadataKeys.SOURCE)
+            filter = filter.and(MetadataFilterBuilder.metadataKey(MetadataKeys.SOURCE)
                     .isIn(request.getSources().toArray(new String[0])));
         }
+        searchRequestBuilder.filter(filter);
         EmbeddingSearchResult<TextSegment> searchResult = embeddingStore.search(searchRequestBuilder.build());
         List<EmbeddingMatch<TextSegment>> matches = searchResult.matches();
 
@@ -169,7 +177,9 @@ public class RagService {
 
         ChatMemory chatMemory = null;
         if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
-            chatMemory = memoryMap.computeIfAbsent(request.getSessionId(), id -> MessageWindowChatMemory.builder()
+            String memoryKey = request.getSessionId() + "|"
+                    + (request.getDepartment() == null ? "all-only" : request.getDepartment());
+            chatMemory = memoryMap.computeIfAbsent(memoryKey, id -> MessageWindowChatMemory.builder()
                     .id(id)
                     .maxMessages(MAX_MEMORY_MESSAGES)
                     .build());

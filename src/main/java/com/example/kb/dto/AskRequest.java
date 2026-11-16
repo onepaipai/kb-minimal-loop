@@ -15,6 +15,8 @@ public class AskRequest {
     private Integer maxResults;
     /** 可选：最低相关度分数（0~1），不传用默认 0.55 */
     private Double minScore;
+    /** 可选：部门代号，不传只查全员可见的块 */
+    private String department;
 
     public String getQuestion() {
         return question;
@@ -54,5 +56,13 @@ public class AskRequest {
 
     public void setMinScore(Double minScore) {
         this.minScore = minScore;
+    }
+
+    public String getDepartment() {
+        return department;
+    }
+
+    public void setDepartment(String department) {
+        this.department = department;
     }
 }

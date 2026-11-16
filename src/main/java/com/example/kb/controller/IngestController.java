@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.Locale;
 import java.util.Set;
 
+import com.example.kb.common.Visibility;
 import com.example.kb.dto.IngestResponse;
 import com.example.kb.service.CodeIngestService;
 import com.example.kb.service.IngestService;
@@ -32,9 +33,11 @@ public class IngestController {
         this.codeIngestService = codeIngestService;
     }
 
-    /** 上传文档并切块入库，支持 .txt/.pdf/.doc/.docx/.md/.java。 */
+    /** 上传文档并切块入库，支持 .txt/.pdf/.doc/.docx/.md/.java；visibility 可选，不传默认全员可见。 */
     @PostMapping("/ingest")
-    public IngestResponse ingest(@RequestParam("file") MultipartFile file) throws IOException {
+    public IngestResponse ingest(@RequestParam("file") MultipartFile file,
+                                 @RequestParam(value = "visibility", required = false) String visibility) throws IOException {
+        String effectiveVisibility = visibility == null ? Visibility.ALL : Visibility.normalize(visibility);
         String fileName = file.getOriginalFilename();
         String lowerName = fileName == null ? "" : fileName.toLowerCase(Locale.ROOT);
         if (SUPPORTED_SUFFIXES.stream().noneMatch(lowerName::endsWith)) {
@@ -42,8 +45,8 @@ public class IngestController {
         }
         if (lowerName.endsWith(JAVA_SUFFIX)) {
             // Java 单文件走代码知识库入库（JavaParser 按方法切块）
-            return codeIngestService.ingestJava(file);
+            return codeIngestService.ingestJava(file, effectiveVisibility);
         }
-        return ingestService.ingest(file);
+        return ingestService.ingest(file, effectiveVisibility);
     }
 }

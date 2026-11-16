@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
+import com.example.kb.common.Visibility;
 import com.example.kb.dto.AskRequest;
 import com.example.kb.dto.AskResponse;
 import com.example.kb.dto.ReferenceHit;
@@ -98,10 +99,13 @@ public class AskController {
         }
     }
 
-    /** /api/ask 与 /api/ask-stream 共用的入参校验，越界一律 400。 */
+    /** /api/ask 与 /api/ask-stream 共用的入参校验，越界一律 400；部门代号在入口统一小写并校验，prepare() 直接用。 */
     private void validateAskRequest(AskRequest request) {
         if (request.getQuestion() == null || request.getQuestion().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "question 不能为空");
+        }
+        if (request.getDepartment() != null) {
+            request.setDepartment(Visibility.normalize(request.getDepartment()));
         }
         if (request.getMaxResults() != null && (request.getMaxResults() < 1 || request.getMaxResults() > 20)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "maxResults 仅允许 1-20");

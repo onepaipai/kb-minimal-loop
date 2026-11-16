@@ -2,6 +2,7 @@ package com.example.kb.service;
 
 import java.util.List;
 
+import com.example.kb.common.Visibility;
 import com.example.kb.dto.DeleteDocumentResponse;
 import com.example.kb.dto.DocumentListResponse;
 import com.example.kb.dto.DocumentSummary;
@@ -28,20 +29,32 @@ public class DocumentManageService {
     }
 
     /**
-     * 按 metadata 里的 source 分组统计已入库文档与块数。
+     * 按 metadata 里的 source 分组统计已入库文档与块数，再按 visibility 过滤：
+     * 不传 department 只列全员可见的，传了列全员可见加该部门的。
+     * 未回填 visibility 的旧文档不列出，回填 SQL 见 docs/architecture.md。
      */
-    public DocumentListResponse listDocuments() {
-        String sql = "SELECT metadata->>'source' AS source, count(*) AS chunks FROM " + TABLE
+    public DocumentListResponse listDocuments(String department) {
+        String sql = "SELECT metadata->>'source' AS source, max(metadata->>'visibility') AS visibility, count(*) AS chunks FROM " + TABLE
                 + " WHERE metadata->>'source' IS NOT NULL GROUP BY metadata->>'source' ORDER BY source";
         List<DocumentSummary> documents = jdbcTemplate.query(sql, (rs, rowNum) -> {
             DocumentSummary summary = new DocumentSummary();
             summary.setSource(rs.getString("source"));
+            summary.setVisibility(rs.getString("visibility"));
             summary.setChunks(rs.getInt("chunks"));
             return summary;
         });
         DocumentListResponse response = new DocumentListResponse();
-        response.setDocuments(documents);
+        response.setDocuments(documents.stream()
+                .filter(summary -> visibleTo(summary.getVisibility(), department))
+                .toList());
         return response;
+    }
+
+    private static boolean visibleTo(String visibility, String department) {
+        if (Visibility.ALL.equals(visibility)) {
+            return true;
+        }
+        return department != null && department.equals(visibility);
     }
 
     /**

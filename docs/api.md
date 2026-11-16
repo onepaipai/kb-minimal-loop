@@ -11,10 +11,16 @@ curl -X POST http://localhost:8080/api/ingest -F "file=@docs/产品手册.pdf"
 
 支持后缀（不区分大小写）：`.txt` 直读 UTF-8；`.pdf/.doc/.docx/.md` 走 Tika 解析；`.java` 走代码知识库链路（见 [架构](architecture.md)）。其他后缀返回 400。
 
+可选参数 `visibility`：该文档的可见性，`all`（全员可见，默认）或一个部门代号（如 `hr`、`finance`）；只允许小写字母、数字、下划线、中划线，别的字符报 400。同名文件重新上传时新 visibility 覆盖旧的。
+
+```bash
+curl -X POST http://localhost:8080/api/ingest -F "file=@docs/请假制度.txt" -F "visibility=hr"
+```
+
 返回：
 
 ```json
-{"file":"请假制度.txt","chunks":1}
+{"file":"请假制度.txt","chunks":1,"visibility":"hr"}
 ```
 
 `chunks` 为入库后实际落库统计。同名文件重复上传时自动整体替换，清单块数不翻倍。
@@ -32,7 +38,8 @@ curl -X POST http://localhost:8080/api/ask -H "Content-Type: application/json" -
 ```
 
 - `sources` 第 i 个元素对应回答中的 `[i]` 引用编号；`hits` 同时给出每条引用的相关度分数（0~1）与命中的原文块，便于调整 `minScore`。
-- 可选入参：`sources` 数组（只在指定文档内检索）、`sessionId`（多轮追问，同会话保留问答历史）、`maxResults`（1–20，默认 5）、`minScore`（0–1，默认 0.55）。
+- 可选入参：`sources` 数组（只在指定文档内检索）、`sessionId`（多轮追问，同会话保留问答历史）、`maxResults`（1–20，默认 5）、`minScore`（0–1，默认 0.55）、`department`（部门代号，只查全员可见 + 该部门的块；不传只查全员可见的）。
+- 权限过滤在 pgvector 检索内完成（`visibility` 与 `sources` 用 `Filter.and` 组合），没权限的块连 prompt 都不进；已入库但没有 `visibility` 字段的旧块查不到，先跑回填 SQL（见 [架构](architecture.md)）。
 
 ```bash
 # 定向检索
@@ -60,15 +67,18 @@ curl -N -X POST http://localhost:8080/api/ask-stream -H "Content-Type: applicati
 
 ```bash
 curl http://localhost:8080/api/documents
+curl "http://localhost:8080/api/documents?department=hr"
 ```
 
-返回：
+可选参数 `department`：不传只列全员可见的，传了列全员可见加该部门的。返回：
 
 ```json
-{"documents":[{"source":"请假制度.txt","chunks":1},{"source":"报销制度.txt","chunks":1}]}
+{"documents":[{"source":"请假制度.txt","chunks":1,"visibility":"hr"},{"source":"报销制度.txt","chunks":1,"visibility":"all"}]}
 ```
 
 ## DELETE /api/document?source=xxx —— 删除指定文档
+
+第一版里删除仍是管理员操作，不做调用方权限校验。
 
 ```bash
 curl -X DELETE "http://localhost:8080/api/document?source=报销制度.txt"
