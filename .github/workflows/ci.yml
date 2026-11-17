@@ -1,0 +1,21 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+      # 只跑单元测试（Visibility / DepartmentScope），不需要数据库与 API Key；
+      # 需要 Neon 与 Key 的接口验收见 docs/acceptance.md，本地按清单跑
+      - run: mvn -B verify
