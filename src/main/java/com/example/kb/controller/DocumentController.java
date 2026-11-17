@@ -1,50 +1,100 @@
 package com.example.kb.controller;
 
+import java.util.Map;
+import java.util.Set;
+
 import com.example.kb.common.Visibility;
 import com.example.kb.dto.DeleteDocumentResponse;
 import com.example.kb.dto.DocumentListResponse;
+import com.example.kb.service.AuditService;
 import com.example.kb.security.DepartmentScope;
+import com.example.kb.security.UserPrincipal;
 import com.example.kb.service.DocumentManageService;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
-/** 已入库文档管理接口：清单与删除。 */
+/** 已入库文档管理接口：清单、删除与审批（批准/驳回）。 */
 @RestController
 @RequestMapping("/api")
 public class DocumentController {
 
-    private final DocumentManageService documentManageService;
+    private static final Set<String> STATUSES = Set.of("pending", "approved", "rejected");
 
-    public DocumentController(DocumentManageService documentManageService) {
+    private final DocumentManageService documentManageService;
+    private final AuditService auditService;
+
+    public DocumentController(DocumentManageService documentManageService, AuditService auditService) {
         this.documentManageService = documentManageService;
+        this.auditService = auditService;
     }
 
     /**
-     * 已入库文档清单：source、块数与 visibility；department 可选，不传只列全员可见的。
+     * 已入库文档清单：source、块数、visibility、审批状态与版本号；department 可选，不传只列全员可见的。
+     * status 可选筛待审批/已发布/已驳回；普通用户与编辑只看已发布的，管理员与部门管理员看全部。
      * 分页：page 从 0 起，size 1-100，默认 20；越界报 400。
      */
     @GetMapping("/documents")
     public DocumentListResponse documents(@RequestParam(value = "department", required = false) String department,
                                           @RequestParam(value = "page", defaultValue = "0") int page,
-                                          @RequestParam(value = "size", defaultValue = "20") int size) {
+                                          @RequestParam(value = "size", defaultValue = "20") int size,
+                                          @RequestParam(value = "status", required = false) String status) {
         if (page < 0 || size < 1 || size > 100) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "page 从 0 起，size 仅允许 1-100");
         }
+        if (status != null && !STATUSES.contains(status.trim().toLowerCase())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "status 只允许 pending、approved、rejected");
+        }
+        UserPrincipal user = DepartmentScope.currentUser();
         String requested = department == null ? null : Visibility.normalize(department);
-        String effectiveDepartment = DepartmentScope.effectiveDepartment(DepartmentScope.currentUser(), requested);
-        return documentManageService.listDocuments(effectiveDepartment, page, size);
+        String effectiveDepartment = DepartmentScope.effectiveDepartment(user, requested);
+        boolean includePending = user != null && (user.isAdmin() || user.isDeptAdmin());
+        return documentManageService.listDocuments(effectiveDepartment, page, size, status, includePending);
     }
 
-    /** 删除指定文档的全部块，仅管理员能调。 */
+    /** 删除指定文档的全部块：管理员可删全部，部门管理员只删本部门的。 */
     @DeleteMapping("/document")
-    @PreAuthorize("hasRole('ADMIN')")
     public DeleteDocumentResponse deleteDocument(@RequestParam("source") String source) {
-        return documentManageService.deleteDocument(source);
+        UserPrincipal user = DepartmentScope.requireCurrentUser();
+        String visibility = requireDocumentVisibility(source);
+        DepartmentScope.requireCanDeleteDocument(user, visibility);
+        DeleteDocumentResponse response = documentManageService.deleteDocument(source);
+        auditService.record(user.username(), "DELETE_DOC", source, "deletedChunks=" + response.getDeletedChunks());
+        return response;
+    }
+
+    /** 批准文档发布：整篇文档的块统一改成已发布，问答开始能查到。 */
+    @PostMapping("/document/approve")
+    public Map<String, Object> approveDocument(@RequestParam("source") String source) {
+        UserPrincipal user = DepartmentScope.requireCurrentUser();
+        String visibility = requireDocumentVisibility(source);
+        DepartmentScope.requireCanApprove(user, visibility);
+        int chunks = documentManageService.setStatus(source, "approved");
+        auditService.record(user.username(), "APPROVE", source, "chunks=" + chunks);
+        return Map.of("source", source, "status", "approved", "chunks", chunks);
+    }
+
+    /** 驳回文档：整篇文档的块统一改成已驳回，问答查不到，删了可重新上传。 */
+    @PostMapping("/document/reject")
+    public Map<String, Object> rejectDocument(@RequestParam("source") String source) {
+        UserPrincipal user = DepartmentScope.requireCurrentUser();
+        String visibility = requireDocumentVisibility(source);
+        DepartmentScope.requireCanApprove(user, visibility);
+        int chunks = documentManageService.setStatus(source, "rejected");
+        auditService.record(user.username(), "REJECT", source, "chunks=" + chunks);
+        return Map.of("source", source, "status", "rejected", "chunks", chunks);
+    }
+
+    private String requireDocumentVisibility(String source) {
+        String visibility = documentManageService.getVisibility(source);
+        if (visibility == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "文档不存在");
+        }
+        return visibility;
     }
 }

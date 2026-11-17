@@ -172,6 +172,9 @@ body { margin: 0; background: var(--tblr-bg-surface-secondary, #f4f5f7); }
 }
 .msg-text { white-space: pre-wrap; overflow-wrap: break-word; }
 
+/* 回答反馈按钮 */
+.feedback-row { display: flex; gap: 6px; margin-top: 8px; }
+
 /* 引用 */
 .hit { border-top: 1px solid var(--tblr-border-color, #e6e7e9); padding: 8px 0; font-size: 13px; }
 .hit .hit-meta { color: var(--tblr-secondary, #666); }

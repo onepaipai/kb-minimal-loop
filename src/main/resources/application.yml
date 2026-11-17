@@ -25,3 +25,13 @@ langchain4j:
     api-key: ${DASHSCOPE_API_KEY}
     base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
     model-name: text-embedding-v4
+
+management:
+  endpoints:
+    web:
+      exposure:
+        # 健康检查与基础信息对外开放，metrics 与 prometheus 走安全配置（需登录）
+        include: health,info,metrics,prometheus
+  endpoint:
+    health:
+      show-details: never

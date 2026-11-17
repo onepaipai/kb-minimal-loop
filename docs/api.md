@@ -4,7 +4,7 @@
 
 ## 前端页面
 
-浏览器打开 `http://localhost:8080/` 即可用：企业级外壳——登录页左品牌区右表单；登录后默认进总览仪表盘，统计（入库文档、知识块、注册用户）全部来自真实接口，另有快捷操作与最近入库文档；左侧深色边栏是导航（总览、智能问答、文档管理、用户管理、改密码）与会话列表（新建、切换、删除对话，记录只存本浏览器）；问答是中央对话气泡（默认流式逐字出，引用分数与原文显示在回答下方），输入框上方有示例问题，Enter 发送、Shift+Enter 换行；上传文档、清单与删除、用户管理、改密码在侧边栏切视图打开。Token 存浏览器 localStorage，8 小时有效，过期后接口返回 401，前端自动回登录页。静态文件在 `src/main/resources/static/`（`index.html`、`styles.css`、`app.js`，无构建步骤）；样式用 Tabler v1.7.5（MIT，GitHub tabler/tabler 的 release 构建，`tabler.min.css` 直接放在 static/ 里本地引入，不依赖外网）；`/api/**` 之外的请求全部放行，所以页面不需要登录就能打开，调接口时才要 Token。
+浏览器打开 `http://localhost:8080/` 即可用：企业级外壳——登录页左品牌区右表单；登录后默认进总览仪表盘，统计（入库文档、知识块、注册用户、待审批文档、问答好评率）全部来自真实接口，另有快捷操作与最近入库文档；左侧深色边栏是导航（总览、智能问答、文档管理、审批、部门管理、审计日志、用户管理、改密码）与会话列表（新建、切换、删除对话，记录只存本浏览器）；问答是中央对话气泡（默认流式逐字出，引用分数与原文显示在回答下方，回答下有好评/差评按钮），输入框上方有示例问题，Enter 发送、Shift+Enter 换行；上传文档、清单与删除、审批、部门管理、审计日志、用户管理、改密码、双因素开关在侧边栏切视图打开。Token 存浏览器 localStorage，8 小时有效，过期后接口返回 401，前端自动回登录页。静态文件在 `src/main/resources/static/`（`index.html`、`styles.css`、`app.js`，无构建步骤）；样式用 Tabler v1.7.5（MIT，GitHub tabler/tabler 的 release 构建，`tabler.min.css` 直接放在 static/ 里本地引入，不依赖外网）；`/api/**` 之外的请求全部放行，所以页面不需要登录就能打开，调接口时才要 Token。
 
 ## 鉴权（除登录外所有接口都要带 Token）
 
@@ -21,7 +21,9 @@ curl http://localhost:8080/api/documents -H "Authorization: Bearer $TOKEN"
 
 - 未带 Token 或 Token 过期返回 401；权限不够（如普通用户调删除）返回 403，错误体与业务错误同一格式。
 - 首次启动：库里没有管理员时自动创建一个（账号走 `ADMIN_USERNAME`，默认 `admin`；密码走 `ADMIN_PASSWORD`，不配则随机生成并打在启动日志里），登录后请立即调 `/api/auth/change-password` 改掉。
-- 管理员创建用户见 [管理员接口](#post-apiadminusers--创建用户仅-admin)，用户有 `role`（ADMIN/USER）与 `department`（归属部门，管理员为 null）；普通用户只能访问本部门的文档，传别的部门报 403。
+- 角色四档：`ADMIN` 全局、`DEPT_ADMIN` 管本部门、`EDITOR` 可上传待审批、`USER` 只能问答；用户有 `department`（归属部门，管理员为 null）；普通用户只能访问本部门的文档，传别的部门报 403。
+- 登录加固：连续 5 次密码错误锁定账号 15 分钟；开了双因素的账号登录时多传 `totpCode`（6 位动态验证码，见 [双因素](#双因素认证totp)）；密码策略：至少 10 位且同时含字母和数字。
+- 限流走数据库（多实例共用）：已登录用户每分钟 120 次，未登录按 IP 每分钟 30 次，超了返回 429。
 
 ## POST /api/ingest —— 上传文档入库
 
@@ -30,21 +32,17 @@ curl -X POST http://localhost:8080/api/ingest -H "Authorization: Bearer $TOKEN" 
 curl -X POST http://localhost:8080/api/ingest -H "Authorization: Bearer $TOKEN" -F "file=@docs/产品手册.pdf"
 ```
 
-支持后缀（不区分大小写）：`.txt` 直读 UTF-8；`.pdf/.doc/.docx/.md` 走 Tika 解析；`.java` 走代码知识库链路（见 [架构](architecture.md)）。其他后缀返回 400。
+支持后缀（不区分大小写）：`.txt` 直读 UTF-8；`.pdf/.doc/.docx/.md` 走 Tika 解析；`.java` 走代码知识库链路（见 [架构](architecture.md)）。其他后缀返回 400。普通用户（USER）不能上传，报 403。
 
-可选参数 `visibility`：该文档的可见性，`all`（全员可见，默认）或一个部门代号（如 `hr`、`finance`）；只允许小写字母、数字、下划线、中划线，别的字符报 400。同名文件重新上传时新 visibility 覆盖旧的。非管理员只能传 `all` 或自己部门的 visibility，传别的部门报 403。
+可选参数 `visibility`：该文档的可见性，`all`（全员可见，默认）或一个部门代号（如 `hr`、`finance`）；只允许小写字母、数字、下划线、中划线，别的字符报 400。同名文件重新上传时新 visibility 覆盖旧的。非管理员只能传 `all` 或自己部门的 visibility，传别的部门报 403。用到未登记的部门代号时自动在部门表里建一条（名称默认为代号），管理员可在部门管理里改名、挂父部门。
 
-```bash
-curl -X POST http://localhost:8080/api/ingest -H "Authorization: Bearer $TOKEN" -F "file=@docs/请假制度.txt" -F "visibility=hr"
-```
-
-返回：
+入库后文档带审批状态：管理员上传直接发布，部门管理员传本部门的文档直接发布，其余一律待审批（`pending`），须管理员或本部门的部门管理员批准后问答才能查到；驳回的文档问答查不到，删了可重新上传。返回：
 
 ```json
-{"file":"请假制度.txt","chunks":1,"visibility":"hr"}
+{"file":"请假制度.txt","chunks":1,"visibility":"hr","status":"approved"}
 ```
 
-`chunks` 为入库后实际落库统计。同名文件重复上传时自动整体替换，清单块数不翻倍；替换是先入后删——新块入库成功才删旧块，中途失败旧文档还在。
+`chunks` 为入库后实际落库统计。同名文件重复上传时自动整体替换，清单块数不翻倍；替换是先入后删——新块入库成功才删旧块，中途失败旧文档还在；版本号每次同名替换 +1（首版 v1）。
 
 ## POST /api/ask —— 检索问答
 
@@ -58,9 +56,9 @@ curl -X POST http://localhost:8080/api/ask -H "Authorization: Bearer $TOKEN" -H 
 {"answer":"……[1]","sources":["请假制度.txt"]}
 ```
 
-- `sources` 第 i 个元素对应回答中的 `[i]` 引用编号；`hits` 同时给出每条引用的相关度分数（0~1）与命中的原文块，便于调整 `minScore`。
+- `sources` 第 i 个元素对应回答中的 `[i]` 引用编号；`hits` 同时给出每条引用的综合分与命中的原文块。检索是混合的：向量检索（语义）+ 关键词检索（SQL ILIKE，中文按二字滑动分词），两路用 RRF（倒数排名融合，k=60）合并取前 N；`hits.score` 是 RRF 融合分（约 0–0.03，越大越相关），不再是余弦相似度；`minScore` 只卡向量那一路，关键词命中的块不受它限制。
 - 可选入参：`sources` 数组（只在指定文档内检索）、`sessionId`（多轮追问，同会话保留问答历史）、`maxResults`（1–20，默认 5）、`minScore`（0–1，默认 0.55）、`department`（部门代号；有归属部门的用户只能查本部门，传别的报 403，管理员可用该参数指定部门，不传只查全员可见的）。
-- 权限过滤在 pgvector 检索内完成（`visibility` 与 `sources` 用 `Filter.and` 组合），没权限的块连 prompt 都不进；已入库但没有 `visibility` 字段的旧块查不到，先跑回填 SQL（见 [架构](architecture.md)）。
+- 权限过滤在 pgvector 检索内完成（`visibility`、`status` 与 `sources` 用 `Filter.and` 组合），没权限的块和待审批的块连 prompt 都不进；已入库但没有 `visibility` 或 `status` 字段的旧块查不到，先跑回填 SQL（见 [架构](architecture.md)）。
 
 ```bash
 # 定向检索
@@ -91,17 +89,35 @@ curl http://localhost:8080/api/documents -H "Authorization: Bearer $TOKEN"
 curl "http://localhost:8080/api/documents?department=hr&page=0&size=20" -H "Authorization: Bearer $TOKEN"
 ```
 
-可选参数 `department`：不传只列全员可见的，传了列全员可见加该部门的（有归属部门的用户只能看本部门，传别的报 403）。分页：`page` 从 0 起，`size` 1–100，默认 20；越界报 400。返回：
+可选参数 `department`：不传只列全员可见的，传了列全员可见加该部门的（有归属部门的用户只能看本部门，传别的报 403）。`status` 可选筛待审批（`pending`）/已发布（`approved`）/已驳回（`rejected`）；普通用户与编辑只看已发布的，管理员与部门管理员看全部。分页：`page` 从 0 起，`size` 1–100，默认 20；越界报 400。返回：
 
 ```json
-{"documents":[{"source":"请假制度.txt","chunks":1,"visibility":"hr"},{"source":"报销制度.txt","chunks":1,"visibility":"all"}],"total":2,"page":0,"size":20}
+{"documents":[{"source":"请假制度.txt","chunks":1,"visibility":"hr","status":"approved","version":1},{"source":"报销制度.txt","chunks":1,"visibility":"all","status":"pending","version":2}],"total":2,"page":0,"size":20}
 ```
 
-## DELETE /api/document?source=xxx —— 删除指定文档（仅管理员）
+## POST /api/document/approve —— 批准文档发布
+
+```bash
+curl -X POST "http://localhost:8080/api/document/approve?source=报销制度.txt" -H "Authorization: Bearer $TOKEN"
+```
+
+管理员可批全部，部门管理员只批本部门的；整篇文档的块统一改成已发布，问答开始能查到。返回 `{"source":"报销制度.txt","status":"approved","chunks":1}`，文档不存在返回 404。
+
+## POST /api/document/reject —— 驳回文档
+
+```bash
+curl -X POST "http://localhost:8080/api/document/reject?source=报销制度.txt" -H "Authorization: Bearer $TOKEN"
+```
+
+权限与批准同规则；整篇文档的块统一改成已驳回，问答查不到。返回 `{"source":"报销制度.txt","status":"rejected","chunks":1}`。
+
+## DELETE /api/document?source=xxx —— 删除指定文档
 
 ```bash
 curl -X DELETE "http://localhost:8080/api/document?source=报销制度.txt" -H "Authorization: Bearer $TOKEN"
 ```
+
+管理员可删全部，部门管理员只删本部门的；普通用户与编辑报 403。
 
 返回（`deletedChunks` 为实际删除的块数，按删除前后统计差值计算）：
 
@@ -123,23 +139,85 @@ curl -X POST http://localhost:8080/api/auth/login -H "Content-Type: application/
 curl -X POST http://localhost:8080/api/auth/change-password -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"oldPassword":"<旧密码>","newPassword":"<新密码>"}'
 ```
 
-原密码不对返回 401，新密码至少 8 位；成功返回 `{"changed":true}`。
+原密码不对返回 401，新密码至少 10 位且同时含字母和数字；成功返回 `{"changed":true}`。
 
-## POST /api/admin/users —— 创建用户（仅 ADMIN）
+## 双因素认证（TOTP）
+
+用验证器 App（如 Google Authenticator）绑密钥，登录时再加 6 位动态验证码；SSO（企业微信/钉钉/OIDC）需要企业侧注册 IdP 拿 client 配置，无法在这里凭空接，暂不做。
 
 ```bash
-curl -X POST http://localhost:8080/api/admin/users -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"username":"zhang","password":"<至少8位>","role":"USER","department":"hr"}'
+# 1. 生成密钥（返回 secret 与 otpauth 链接，填进验证器 App）
+curl -X POST http://localhost:8080/api/auth/totp/setup -H "Authorization: Bearer $TOKEN"
+# 2. 用 App 里的验证码启用
+curl -X POST http://localhost:8080/api/auth/totp/enable -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"code":"123456"}'
+# 3. 之后登录多传 totpCode
+curl -X POST http://localhost:8080/api/auth/login -H "Content-Type: application/json" -d '{"username":"admin","password":"<密码>","totpCode":"123456"}'
+# 关闭双因素（需校验一次密码）
+curl -X POST http://localhost:8080/api/auth/totp/disable -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"password":"<密码>"}'
 ```
 
-`role` 只允许 ADMIN/USER，不传默认 USER；`department` 不传表示管理员（无归属部门）。用户名已存在返回 409。
+启用前密钥只存不生效；验证码错误返回 401。
 
-## GET /api/admin/users —— 用户清单（仅 ADMIN）
+## POST /api/feedback —— 问答反馈
+
+```bash
+curl -X POST http://localhost:8080/api/feedback -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"question":"请假超过3天找谁批？","answer":"……","helpful":true}'
+```
+
+`helpful` 为 true 好评、false 差评；问答原文截断存 500 字。管理员看好评率见 [反馈统计](#get-apiadminfeedbackstats--问答反馈统计仅-admin)。
+
+## POST /api/admin/users —— 创建用户
+
+```bash
+curl -X POST http://localhost:8080/api/admin/users -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"username":"zhang","password":"<至少10位含字母数字>","role":"USER","department":"hr"}'
+```
+
+`role` 只允许 ADMIN、DEPT_ADMIN、EDITOR、USER，不传默认 USER；ADMIN 必须无部门，DEPT_ADMIN 必须有所属部门。部门管理员只能创建本部门的用户（传别的部门报 403，不传默认建到自己部门）。用户名已存在返回 409。
+
+## GET /api/admin/users —— 用户清单
 
 ```bash
 curl http://localhost:8080/api/admin/users -H "Authorization: Bearer $TOKEN"
 ```
 
-返回用户列表（不含密码 hash）。
+返回用户列表（不含密码 hash）；管理员看全部，部门管理员只看本部门的人。
+
+## 部门管理（仅 ADMIN）
+
+```bash
+# 部门清单
+curl http://localhost:8080/api/admin/departments -H "Authorization: Bearer $TOKEN"
+# 新建部门：code 为代号，parentCode 为父部门代号（可空）
+curl -X POST http://localhost:8080/api/admin/departments -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"code":"tech","name":"技术部","parentCode":null}'
+# 删除部门：仍有文档挂在这个可见性下时报 409
+curl -X DELETE "http://localhost:8080/api/admin/departments?code=tech" -H "Authorization: Bearer $TOKEN"
+```
+
+启动时自动把已入库块里出现过的部门代号登记进来；上传时用到未登记的代号也自动建一条。
+
+## GET /api/admin/audit-logs —— 审计日志（仅 ADMIN）
+
+```bash
+curl "http://localhost:8080/api/admin/audit-logs?page=0&size=20" -H "Authorization: Bearer $TOKEN"
+```
+
+分页，最新在前。记登录、登录失败、上传、删除、审批、驳回、建用户、改密码、问答（问题原文截断 100 字），返回 `{"logs":[{"username":"admin","action":"UPLOAD","target":"请假制度.txt","detail":"visibility=hr status=approved","createdAt":"..."}],"total":1,"page":0,"size":20}`。
+
+## GET /api/admin/feedback/stats —— 问答反馈统计（仅 ADMIN）
+
+```bash
+curl http://localhost:8080/api/admin/feedback/stats -H "Authorization: Bearer $TOKEN"
+```
+
+返回 `{"total":10,"helpful":8,"helpfulRate":0.8}`。
+
+## 健康检查
+
+```bash
+curl http://localhost:8080/actuator/health
+```
+
+`/actuator/health` 与 `/actuator/info` 不用登录；`/actuator/metrics` 与 `/actuator/prometheus` 需带 Token（已登录用户）。
 
 ## 错误体
 

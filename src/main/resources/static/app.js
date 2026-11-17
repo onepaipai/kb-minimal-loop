@@ -14,6 +14,7 @@ const messageEl = $('message');
 
 let currentUser = null;
 let docsPage = 0;
+let auditPage = 0;
 let asking = false;
 let currentSessionId = null;
 
@@ -87,12 +88,19 @@ function showApp() {
     } else {
         deptBadge.hidden = true;
     }
-    $('adminNavBtn').hidden = currentUser.role !== 'ADMIN';
+    $('adminNavBtn').hidden = !(currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN');
+    $('approvalNavBtn').hidden = !(currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN');
+    $('deptNavBtn').hidden = currentUser.role !== 'ADMIN';
+    $('auditNavBtn').hidden = currentUser.role !== 'ADMIN';
     ensureSession();
     showView('dashboard'); // 切到总览时自动刷新统计
     loadDocuments(0);
-    if (currentUser.role === 'ADMIN') {
+    if (currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN') {
         loadUsers();
+    }
+    if (currentUser.role === 'ADMIN') {
+        loadDepartments();
+        loadAuditLogs(0);
     }
 }
 
@@ -127,6 +135,25 @@ async function loadDashboard() {
             $('statUsers').textContent = users.length;
         } catch (e) {
             // 用户数拿不到不影响总览其余内容
+        }
+    }
+    if (currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN') {
+        try {
+            const pending = await api('/api/documents?status=pending&page=0&size=1');
+            $('statPendingCard').hidden = false;
+            $('statPending').textContent = pending.total;
+        } catch (e) {
+            // 待审批数拿不到不影响总览其余内容
+        }
+    }
+    if (currentUser.role === 'ADMIN') {
+        try {
+            const stats = await api('/api/admin/feedback/stats');
+            $('statFeedbackCard').hidden = false;
+            $('statFeedback').textContent = stats.total === 0
+                ? '—' : Math.round(stats.helpfulRate * 100) + '%';
+        } catch (e) {
+            // 好评率拿不到不影响总览其余内容
         }
     }
 }
@@ -247,6 +274,9 @@ function scrollMessagesToBottom() {
 function messageElement(message) {
     const wrap = document.createElement('div');
     wrap.className = 'msg msg-' + message.role;
+    if (message.question) {
+        wrap.dataset.question = message.question;
+    }
     const bubble = document.createElement('div');
     bubble.className = 'msg-bubble';
     const text = document.createElement('div');
@@ -258,8 +288,41 @@ function messageElement(message) {
         renderHitsInto(hits, message.hits);
         bubble.appendChild(hits);
     }
+    if (message.role === 'assistant') {
+        const feedback = document.createElement('div');
+        feedback.className = 'feedback-row';
+        const up = document.createElement('button');
+        up.type = 'button';
+        up.className = 'btn btn-outline-secondary btn-sm';
+        up.textContent = '👍 有用';
+        up.addEventListener('click', () => submitFeedback(wrap, up, true));
+        const down = document.createElement('button');
+        down.type = 'button';
+        down.className = 'btn btn-outline-secondary btn-sm';
+        down.textContent = '👎 没用';
+        down.addEventListener('click', () => submitFeedback(wrap, down, false));
+        feedback.append(up, down);
+        bubble.appendChild(feedback);
+    }
     wrap.appendChild(bubble);
     return wrap;
+}
+
+/** 回答反馈：按原问答提交好评/差评，提交后两个按钮都禁用。 */
+async function submitFeedback(wrap, button, helpful) {
+    const question = wrap.dataset.question || '';
+    if (!question) {
+        return;
+    }
+    const answer = wrap.querySelector('.msg-text').textContent;
+    try {
+        await api('/api/feedback', { method: 'POST', body: { question, answer, helpful } });
+        wrap.querySelectorAll('.feedback-row button').forEach((b) => { b.disabled = true; });
+        button.classList.add('btn-primary');
+        button.classList.remove('btn-outline-secondary');
+    } catch (e) {
+        showMessage(e.message);
+    }
 }
 
 function renderMessages() {
@@ -284,7 +347,7 @@ function renderHitsInto(container, hits) {
         block.className = 'hit';
         const meta = document.createElement('div');
         meta.className = 'hit-meta';
-        meta.textContent = '[' + hit.index + '] ' + hit.source + ' · 相关度 ' + hit.score.toFixed(2);
+        meta.textContent = '[' + hit.index + '] ' + hit.source + ' · 综合分 ' + hit.score.toFixed(3);
         const text = document.createElement('div');
         text.className = 'hit-text';
         text.textContent = hit.text;
@@ -382,12 +445,16 @@ async function askStream(request, bubble) {
 
 /* ---------------- 视图切换 ---------------- */
 
-const VIEW_TITLES = { dashboard: '总览', chat: '智能问答', manage: '文档管理', admin: '用户管理', password: '改密码' };
+const VIEW_TITLES = { dashboard: '总览', chat: '智能问答', manage: '文档管理', approval: '审批',
+    departments: '部门管理', audit: '审计日志', admin: '用户管理', password: '改密码' };
 
 function showView(name) {
     $('dashboardView').hidden = name !== 'dashboard';
     $('chatView').hidden = name !== 'chat';
     $('manageView').hidden = name !== 'manage';
+    $('approvalView').hidden = name !== 'approval';
+    $('departmentsView').hidden = name !== 'departments';
+    $('auditView').hidden = name !== 'audit';
     $('adminView').hidden = name !== 'admin';
     $('passwordView').hidden = name !== 'password';
     document.querySelectorAll('.sidebar-link').forEach((link) => {
@@ -397,6 +464,12 @@ function showView(name) {
     $('appView').classList.remove('sidebar-open');
     if (name === 'dashboard') {
         loadDashboard();
+    } else if (name === 'approval') {
+        loadPending();
+    } else if (name === 'departments') {
+        loadDepartments();
+    } else if (name === 'audit') {
+        loadAuditLogs(auditPage);
     }
 }
 
@@ -416,8 +489,14 @@ async function loadDocuments(page) {
             chunks.textContent = doc.chunks;
             const visibility = document.createElement('td');
             visibility.textContent = doc.visibility;
+            const status = document.createElement('td');
+            status.textContent = doc.status === 'pending' ? '待审批' : doc.status === 'rejected' ? '已驳回' : '已发布';
+            const version = document.createElement('td');
+            version.textContent = 'v' + doc.version;
             const action = document.createElement('td');
-            if (currentUser && currentUser.role === 'ADMIN') {
+            const canDelete = currentUser && (currentUser.role === 'ADMIN'
+                || (currentUser.role === 'DEPT_ADMIN' && currentUser.department === doc.visibility));
+            if (canDelete) {
                 const del = document.createElement('button');
                 del.type = 'button';
                 del.className = 'btn btn-outline-danger btn-sm';
@@ -425,7 +504,7 @@ async function loadDocuments(page) {
                 del.addEventListener('click', () => deleteDocument(doc.source));
                 action.appendChild(del);
             }
-            row.append(source, chunks, visibility, action);
+            row.append(source, chunks, visibility, status, version, action);
             tbody.appendChild(row);
         });
         const totalPages = Math.max(1, Math.ceil(data.total / DOCS_PAGE_SIZE));
@@ -473,6 +552,125 @@ async function loadUsers() {
     }
 }
 
+/* ---------------- 审批 / 部门 / 审计 ---------------- */
+
+async function loadPending() {
+    try {
+        const data = await api('/api/documents?status=pending&page=0&size=100');
+        const tbody = $('approvalTable').querySelector('tbody');
+        tbody.textContent = '';
+        (data.documents || []).forEach((doc) => {
+            const row = document.createElement('tr');
+            const source = document.createElement('td');
+            source.textContent = doc.source;
+            const chunks = document.createElement('td');
+            chunks.textContent = doc.chunks;
+            const visibility = document.createElement('td');
+            visibility.textContent = doc.visibility;
+            const version = document.createElement('td');
+            version.textContent = 'v' + doc.version;
+            const action = document.createElement('td');
+            const approve = document.createElement('button');
+            approve.type = 'button';
+            approve.className = 'btn btn-primary btn-sm me-1';
+            approve.textContent = '批准';
+            approve.addEventListener('click', () => reviewDocument(doc.source, 'approve'));
+            const reject = document.createElement('button');
+            reject.type = 'button';
+            reject.className = 'btn btn-outline-danger btn-sm';
+            reject.textContent = '驳回';
+            reject.addEventListener('click', () => reviewDocument(doc.source, 'reject'));
+            action.append(approve, reject);
+            row.append(source, chunks, visibility, version, action);
+            tbody.appendChild(row);
+        });
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+async function reviewDocument(source, decision) {
+    try {
+        await api('/api/document/' + decision + '?source=' + encodeURIComponent(source), { method: 'POST' });
+        showMessage('「' + source + '」已' + (decision === 'approve' ? '批准发布' : '驳回'));
+        loadPending();
+        loadDocuments(docsPage);
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+async function loadDepartments() {
+    try {
+        const departments = await api('/api/admin/departments');
+        const tbody = $('departmentsTable').querySelector('tbody');
+        tbody.textContent = '';
+        departments.forEach((dept) => {
+            const row = document.createElement('tr');
+            const code = document.createElement('td');
+            code.textContent = dept.code;
+            const name = document.createElement('td');
+            name.textContent = dept.name;
+            const parent = document.createElement('td');
+            parent.textContent = dept.parentCode || '—';
+            const action = document.createElement('td');
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'btn btn-outline-danger btn-sm';
+            del.textContent = '删除';
+            del.addEventListener('click', () => deleteDepartment(dept.code));
+            action.appendChild(del);
+            row.append(code, name, parent, action);
+            tbody.appendChild(row);
+        });
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+async function deleteDepartment(code) {
+    if (!window.confirm('确定删除部门「' + code + '」吗？（仍有文档在用时删不掉）')) {
+        return;
+    }
+    try {
+        await api('/api/admin/departments?code=' + encodeURIComponent(code), { method: 'DELETE' });
+        showMessage('部门已删除');
+        loadDepartments();
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+async function loadAuditLogs(page) {
+    auditPage = page;
+    try {
+        const data = await api('/api/admin/audit-logs?page=' + page + '&size=20');
+        const tbody = $('auditTable').querySelector('tbody');
+        tbody.textContent = '';
+        (data.logs || []).forEach((entry) => {
+            const row = document.createElement('tr');
+            const time = document.createElement('td');
+            time.textContent = entry.createdAt ? entry.createdAt.slice(0, 19).replace('T', ' ') : '—';
+            const user = document.createElement('td');
+            user.textContent = entry.username;
+            const action = document.createElement('td');
+            action.textContent = entry.action;
+            const target = document.createElement('td');
+            target.textContent = entry.target || '—';
+            const detail = document.createElement('td');
+            detail.textContent = entry.detail || '—';
+            row.append(time, user, action, target, detail);
+            tbody.appendChild(row);
+        });
+        const totalPages = Math.max(1, Math.ceil(data.total / 20));
+        $('auditPageInfo').textContent = '第 ' + (page + 1) + ' / ' + totalPages + ' 页，共 ' + data.total + ' 条';
+        $('prevAuditBtn').disabled = page <= 0;
+        $('nextAuditBtn').disabled = (page + 1) * 20 >= data.total;
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
 /* ---------------- 事件绑定 ---------------- */
 
 $('loginForm').addEventListener('submit', async (e) => {
@@ -481,7 +679,8 @@ $('loginForm').addEventListener('submit', async (e) => {
     try {
         const login = await api('/api/auth/login', {
             method: 'POST',
-            body: { username: $('loginUsername').value.trim(), password: $('loginPassword').value },
+            body: { username: $('loginUsername').value.trim(), password: $('loginPassword').value,
+                totpCode: $('loginTotp').value.trim() || null },
         });
         saveSession(login);
         showApp();
@@ -547,7 +746,7 @@ $('askForm').addEventListener('submit', async (e) => {
     storeMessage(currentSessionId, { role: 'user', text: question });
     container.appendChild(messageElement({ role: 'user', text: question }));
     nameSessionIfUntitled(question);
-    const assistantEl = messageElement({ role: 'assistant', text: '' });
+    const assistantEl = messageElement({ role: 'assistant', text: '', question });
     container.appendChild(assistantEl);
     scrollMessagesToBottom();
     try {
@@ -556,7 +755,7 @@ $('askForm').addEventListener('submit', async (e) => {
         const result = $('askStream').checked
             ? await askStream(request, bubble)
             : await askOnce(request, bubble);
-        storeMessage(currentSessionId, { role: 'assistant', text: result.answer, hits: result.hits || [] });
+        storeMessage(currentSessionId, { role: 'assistant', text: result.answer, hits: result.hits || [], question });
     } catch (err) {
         assistantEl.querySelector('.msg-text').textContent = '出错了：' + err.message;
         showMessage(err.message);
@@ -589,6 +788,60 @@ $('uploadForm').addEventListener('submit', async (e) => {
 $('refreshDocsBtn').addEventListener('click', () => loadDocuments(docsPage));
 $('prevPageBtn').addEventListener('click', () => loadDocuments(Math.max(0, docsPage - 1)));
 $('nextPageBtn').addEventListener('click', () => loadDocuments(docsPage + 1));
+$('refreshApprovalBtn').addEventListener('click', () => loadPending());
+$('refreshAuditBtn').addEventListener('click', () => loadAuditLogs(auditPage));
+$('prevAuditBtn').addEventListener('click', () => loadAuditLogs(Math.max(0, auditPage - 1)));
+$('nextAuditBtn').addEventListener('click', () => loadAuditLogs(auditPage + 1));
+
+$('createDepartmentForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+        await api('/api/admin/departments', {
+            method: 'POST',
+            body: { code: $('deptCode').value.trim(), name: $('deptName').value.trim(),
+                parentCode: $('deptParent').value.trim() || null },
+        });
+        showMessage('部门已创建');
+        e.target.reset();
+        loadDepartments();
+    } catch (err) {
+        showMessage(err.message);
+    }
+});
+
+$('totpSetupBtn').addEventListener('click', async () => {
+    try {
+        const setup = await api('/api/auth/totp/setup', { method: 'POST' });
+        $('totpSecret').textContent = setup.secret;
+        $('totpUrl').textContent = setup.otpauthUrl;
+        $('totpSecretBox').hidden = false;
+    } catch (err) {
+        showMessage(err.message);
+    }
+});
+
+$('totpEnableForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+        await api('/api/auth/totp/enable', { method: 'POST', body: { code: $('totpCode').value.trim() } });
+        showMessage('双因素已启用，登录时需输入动态验证码');
+        $('totpSecretBox').hidden = true;
+        e.target.reset();
+    } catch (err) {
+        showMessage(err.message);
+    }
+});
+
+$('totpDisableForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+        await api('/api/auth/totp/disable', { method: 'POST', body: { password: $('totpDisablePassword').value } });
+        showMessage('双因素已关闭');
+        e.target.reset();
+    } catch (err) {
+        showMessage(err.message);
+    }
+});
 
 $('createUserForm').addEventListener('submit', async (e) => {
     e.preventDefault();

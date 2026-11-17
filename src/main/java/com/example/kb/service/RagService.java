@@ -23,9 +23,6 @@ import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.output.Response;
-import dev.langchain4j.store.embedding.EmbeddingMatch;
-import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
-import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.filter.Filter;
 import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
@@ -63,14 +60,17 @@ public class RagService {
     private final ChatModel chatModel;
     private final StreamingChatModel streamingChatModel;
     private final ChatMemoryStore chatMemoryStore;
+    private final HybridSearchService hybridSearchService;
 
     public RagService(EmbeddingModel embeddingModel, EmbeddingStore<TextSegment> embeddingStore,
-                      ChatModel chatModel, StreamingChatModel streamingChatModel, ChatMemoryStore chatMemoryStore) {
+                      ChatModel chatModel, StreamingChatModel streamingChatModel, ChatMemoryStore chatMemoryStore,
+                      HybridSearchService hybridSearchService) {
         this.embeddingModel = embeddingModel;
         this.embeddingStore = embeddingStore;
         this.chatModel = chatModel;
         this.streamingChatModel = streamingChatModel;
         this.chatMemoryStore = chatMemoryStore;
+        this.hybridSearchService = hybridSearchService;
     }
 
     /** 流式问答的事件回调：Controller 接到 SseEmitter 上，顺序为 sources → token* → done / onError。 */
@@ -146,36 +146,33 @@ public class RagService {
         if (request.getMinScore() != null) {
             minScore = request.getMinScore();
         }
-        EmbeddingSearchRequest.EmbeddingSearchRequestBuilder searchRequestBuilder = EmbeddingSearchRequest.builder()
-                .queryEmbedding(embeddingResponse.content())
-                .maxResults(maxResults)
-                .minScore(minScore);
-        // 权限过滤进 pgvector：只查全员可见 + 本部门的块，没权限的块连 prompt 都不进
+        // 权限过滤进 pgvector：只查全员可见 + 本部门的块，没权限的块连 prompt 都不进；只查已发布的块
         String department = scope.department();
         Filter filter = department == null
                 ? MetadataFilterBuilder.metadataKey(MetadataKeys.VISIBILITY).isEqualTo(Visibility.ALL)
                 : MetadataFilterBuilder.metadataKey(MetadataKeys.VISIBILITY).isIn(Visibility.ALL, department);
+        filter = filter.and(MetadataFilterBuilder.metadataKey(MetadataKeys.STATUS).isEqualTo("approved"));
         if (request.getSources() != null && !request.getSources().isEmpty()) {
             filter = filter.and(MetadataFilterBuilder.metadataKey(MetadataKeys.SOURCE)
                     .isIn(request.getSources().toArray(new String[0])));
         }
-        searchRequestBuilder.filter(filter);
-        EmbeddingSearchResult<TextSegment> searchResult = embeddingStore.search(searchRequestBuilder.build());
-        List<EmbeddingMatch<TextSegment>> matches = searchResult.matches();
+        // 混合检索：向量路 + 关键词路 RRF 融合；老块没有 status 字段时须先跑回填 SQL（见 docs/architecture.md），否则查不到
+        List<HybridSearchService.RetrievedChunk> chunks = hybridSearchService.search(
+                embeddingResponse.content(), filter, request.getQuestion(), department,
+                request.getSources(), maxResults, minScore);
 
         Set<String> distinctSources = new LinkedHashSet<>();
         List<ReferenceHit> hits = new ArrayList<>();
         StringBuilder contextBuilder = new StringBuilder();
-        for (int i = 0; i < matches.size(); i++) {
-            TextSegment segment = matches.get(i).embedded();
-            String source = segment.metadata().getString(MetadataKeys.SOURCE);
-            contextBuilder.append("[").append(i + 1).append("] ").append(segment.text()).append("\n\n");
-            distinctSources.add(source);
+        for (int i = 0; i < chunks.size(); i++) {
+            HybridSearchService.RetrievedChunk chunk = chunks.get(i);
+            contextBuilder.append("[").append(i + 1).append("] ").append(chunk.text()).append("\n\n");
+            distinctSources.add(chunk.source());
             ReferenceHit hit = new ReferenceHit();
             hit.setIndex(i + 1);
-            hit.setScore(matches.get(i).score());
-            hit.setSource(source);
-            hit.setText(segment.text());
+            hit.setScore(chunk.score());
+            hit.setSource(chunk.source());
+            hit.setText(chunk.text());
             hits.add(hit);
         }
         String prompt = "资料：\n" + contextBuilder + "问题：" + request.getQuestion();

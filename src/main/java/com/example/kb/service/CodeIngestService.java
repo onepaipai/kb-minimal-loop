@@ -47,7 +47,7 @@ public class CodeIngestService {
     }
 
     /** 先解析（语法错直接 400），成功后先入新块再删旧块，失败时旧块不动。 */
-    public IngestResponse ingestJava(MultipartFile file, String visibility) throws IOException {
+    public IngestResponse ingestJava(MultipartFile file, String visibility, String status) throws IOException {
         String fileName = file.getOriginalFilename();
         String source = new String(file.getBytes(), StandardCharsets.UTF_8);
         if (source.isBlank()) {
@@ -68,19 +68,22 @@ public class CodeIngestService {
                 ? primaryType.getNameAsString()
                 : packageName + "." + primaryType.getNameAsString();
         String batch = UUID.randomUUID().toString();
-        List<TextSegment> segments = buildSegments(fileName, fullClassName, packageName, source, cu, visibility, batch);
+        int version = documentManageService.nextVersion(fileName);
+        List<TextSegment> segments = buildSegments(fileName, fullClassName, packageName, source, cu, visibility, batch,
+                status, version);
         if (segments.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件解析后没有可入库的代码块");
         }
         Response<List<Embedding>> embeddingsResponse = embeddingModel.embedAll(segments);
         embeddingStore.addAll(embeddingsResponse.content(), segments);
         documentManageService.removeReplaced(fileName, batch);
-        return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility);
+        return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility, status);
     }
 
     /** 类头块（第 1 行到第一个方法之前）加每个方法一块，块前加定位头。 */
     private List<TextSegment> buildSegments(String fileName, String fullClassName, String packageName,
-                                            String source, CompilationUnit cu, String visibility, String batch) {
+                                            String source, CompilationUnit cu, String visibility, String batch,
+                                            String status, int version) {
         List<String> lines = List.of(source.split("\n", -1));
         List<MethodDeclaration> methods = cu.findAll(MethodDeclaration.class);
         List<Integer> beginLines = new ArrayList<>();
@@ -94,7 +97,7 @@ public class CodeIngestService {
         }
         List<TextSegment> segments = new ArrayList<>();
         segments.add(newSegment(fileName, fullClassName, packageName,
-                joinLines(lines, 1, firstMethodBegin - 1), "类头", "类头", visibility, batch));
+                joinLines(lines, 1, firstMethodBegin - 1), "类头", "类头", visibility, batch, status, version));
         for (int i = 0; i < methods.size(); i++) {
             MethodDeclaration method = methods.get(i);
             // 嵌套类的方法归属最近一层类，不再都标成外层类
@@ -103,7 +106,8 @@ public class CodeIngestService {
                     .orElse(fullClassName);
             for (String part : splitMethodText(lines, beginLines.get(i), endLines.get(i))) {
                 segments.add(newSegment(fileName, methodClass, packageName, part,
-                        method.getNameAsString(), method.getDeclarationAsString(true, true, true), visibility, batch));
+                        method.getNameAsString(), method.getDeclarationAsString(true, true, true), visibility, batch,
+                        status, version));
             }
         }
         return segments;
@@ -155,12 +159,15 @@ public class CodeIngestService {
     }
 
     private TextSegment newSegment(String fileName, String fullClassName, String packageName,
-                                   String text, String method, String signature, String visibility, String batch) {
+                                   String text, String method, String signature, String visibility, String batch,
+                                   String status, int version) {
         String header = "// 文件：" + fileName + " | 类：" + fullClassName + " | 方法：" + method;
         Metadata metadata = new Metadata();
         metadata.put(MetadataKeys.SOURCE, fileName);
         metadata.put(MetadataKeys.VISIBILITY, visibility);
         metadata.put(MetadataKeys.BATCH, batch);
+        metadata.put(MetadataKeys.STATUS, status);
+        metadata.put(MetadataKeys.VERSION, String.valueOf(version));
         metadata.put("kind", "code");
         metadata.put("package", packageName);
         metadata.put("class", fullClassName);

@@ -8,6 +8,7 @@ import com.example.kb.common.Visibility;
 import com.example.kb.dto.AskRequest;
 import com.example.kb.dto.AskResponse;
 import com.example.kb.dto.ReferenceHit;
+import com.example.kb.service.AuditService;
 import com.example.kb.security.DepartmentScope;
 import com.example.kb.service.RagService;
 import org.springframework.http.HttpStatus;
@@ -31,16 +32,20 @@ public class AskController {
     private static final String EVENT_DONE = "done";
 
     private final RagService ragService;
+    private final AuditService auditService;
 
-    public AskController(RagService ragService) {
+    public AskController(RagService ragService, AuditService auditService) {
         this.ragService = ragService;
+        this.auditService = auditService;
     }
 
     /** 基于知识库检索结果回答问题。入参越界一律 400。 */
     @PostMapping("/ask")
     public AskResponse ask(@RequestBody AskRequest request) {
         validateAskRequest(request);
-        return ragService.ask(request, DepartmentScope.askScope(DepartmentScope.currentUser(), request.getDepartment()));
+        RagService.AskScope scope = DepartmentScope.askScope(DepartmentScope.currentUser(), request.getDepartment());
+        auditService.record(scope.username(), "ASK", request.getSessionId(), request.getQuestion());
+        return ragService.ask(request, scope);
     }
 
     /**
@@ -52,6 +57,7 @@ public class AskController {
     public SseEmitter askStream(@RequestBody AskRequest request) {
         validateAskRequest(request);
         RagService.AskScope scope = DepartmentScope.askScope(DepartmentScope.currentUser(), request.getDepartment());
+        auditService.record(scope.username(), "ASK", request.getSessionId(), request.getQuestion());
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MILLIS);
         CompletableFuture.runAsync(() -> streamTo(request, scope, emitter));
         return emitter;

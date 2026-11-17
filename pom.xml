@@ -59,6 +59,16 @@
             <artifactId>langchain4j-document-parser-apache-tika</artifactId>
             <version>${langchain4j-tika.version}</version>
         </dependency>
+        <!-- Actuator：健康检查与指标（/actuator/health 对外，metrics/prometheus 需登录） -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+            <scope>runtime</scope>
+        </dependency>
         <!-- Security：登录鉴权（BCrypt 密码 + JWT 过滤器），接口默认都要带 Bearer Token -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

@@ -46,17 +46,21 @@ public class IngestService {
 
     /**
      * 按后缀分流解析入库：txt 直接按 UTF-8 读，其余交给 Tika 自动识别；同名文件先入后删整体替换。
+     * status 为审批初始状态（管理员与本部门管理员直接发布，其余待审批），version 为同名替换的下一个版本号。
      */
-    public IngestResponse ingest(MultipartFile file, String visibility) throws IOException {
+    public IngestResponse ingest(MultipartFile file, String visibility, String status) throws IOException {
         String fileName = file.getOriginalFilename();
         String content = new String(file.getBytes(), StandardCharsets.UTF_8);
         if (content.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件内容为空");
         }
+        int version = documentManageService.nextVersion(fileName);
         Metadata metadata = new Metadata();
         metadata.put(MetadataKeys.SOURCE, fileName);
         metadata.put(MetadataKeys.VISIBILITY, visibility);
         metadata.put(MetadataKeys.BATCH, UUID.randomUUID().toString());
+        metadata.put(MetadataKeys.STATUS, status);
+        metadata.put(MetadataKeys.VERSION, String.valueOf(version));
         Document document;
         if (fileName.endsWith(TEXT_SUFFIX)) {
             document = Document.from(content, metadata);
@@ -71,7 +75,7 @@ public class IngestService {
         // 先入后删：新块入库成功才删旧块，入库中途失败（向量接口报错、断库）旧块不动
         embeddingStoreIngestor.ingest(document);
         documentManageService.removeReplaced(fileName, metadata.getString(MetadataKeys.BATCH));
-        return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility);
+        return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility, status);
     }
 
     /**
