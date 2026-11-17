@@ -2,12 +2,55 @@ package com.example.kb.service;
 
 import java.util.List;
 
+import dev.langchain4j.data.embedding.Embedding;
+import dev.langchain4j.data.segment.TextSegment;
+import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
+import dev.langchain4j.store.embedding.EmbeddingSearchResult;
+import dev.langchain4j.store.embedding.EmbeddingStore;
+import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.core.RowMapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
+/** 混合检索：RRF 融合、分词、关键词 SQL 都是纯逻辑或可 mock 的，不碰真实库。 */
+@ExtendWith(MockitoExtension.class)
 class HybridSearchServiceTest {
+
+    @Mock
+    private EmbeddingStore<TextSegment> embeddingStore;
+    @Mock
+    private JdbcTemplate jdbcTemplate;
+
+    @Test
+    void keywordSearchRanksByTermFrequency() {
+        when(embeddingStore.search(any(EmbeddingSearchRequest.class)))
+                .thenReturn(new EmbeddingSearchResult<>(List.of()));
+        when(jdbcTemplate.query(anyString(), any(RowMapper.class), any(Object[].class)))
+                .thenReturn(List.of());
+        HybridSearchService service = new HybridSearchService(embeddingStore, jdbcTemplate);
+        service.search(new Embedding(new float[] {0.1f, 0.2f}),
+                MetadataFilterBuilder.metadataKey("visibility").isEqualTo("all"),
+                "请假超过3天找谁批？", null, List.of(), 5, 0.55);
+
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).query(sql.capture(), any(RowMapper.class), any(Object[].class));
+        // 排序用词频（删词前后长度差 / 词长），不再是二值命中数；候选集仍是 ILIKE
+        assertTrue(sql.getValue().contains("LENGTH(text) - LENGTH(REPLACE(LOWER(text), LOWER(?), ''))"));
+        assertFalse(sql.getValue().contains("CASE WHEN text ILIKE"));
+        assertTrue(sql.getValue().contains("text ILIKE ?"));
+    }
 
     @Test
     void fusePrefersChunksInBothLists() {

@@ -5,12 +5,14 @@ import java.util.Map;
 import com.example.kb.dto.ChangePasswordRequest;
 import com.example.kb.dto.LoginRequest;
 import com.example.kb.dto.LoginResponse;
+import com.example.kb.dto.RefreshTokenRequest;
 import com.example.kb.dto.TotpCodeRequest;
 import com.example.kb.dto.TotpPasswordRequest;
 import com.example.kb.dto.TotpSetupResponse;
 import com.example.kb.service.AuditService;
 import com.example.kb.security.DepartmentScope;
 import com.example.kb.security.JwtService;
+import com.example.kb.security.RefreshTokenService;
 import com.example.kb.security.TotpService;
 import com.example.kb.security.UserPrincipal;
 import com.example.kb.security.UserService;
@@ -35,18 +37,21 @@ public class AuthController {
     private final JwtService jwtService;
     private final PasswordEncoder passwordEncoder;
     private final TotpService totpService;
+    private final RefreshTokenService refreshTokenService;
     private final AuditService auditService;
 
     public AuthController(UserService userService, JwtService jwtService, PasswordEncoder passwordEncoder,
-                          TotpService totpService, AuditService auditService) {
+                          TotpService totpService, RefreshTokenService refreshTokenService,
+                          AuditService auditService) {
         this.userService = userService;
         this.jwtService = jwtService;
         this.passwordEncoder = passwordEncoder;
         this.totpService = totpService;
+        this.refreshTokenService = refreshTokenService;
         this.auditService = auditService;
     }
 
-    /** 用户名密码校验通过发 Token，有效期 8 小时。 */
+    /** 用户名密码校验通过发 Token，有效期 8 小时；同时发 Refresh Token（7 天）。 */
     @PostMapping("/login")
     public LoginResponse login(@RequestBody LoginRequest request) {
         if (request.getUsername() == null || request.getUsername().isBlank()
@@ -78,14 +83,41 @@ public class AuthController {
         auditService.record(username, "LOGIN", null, null);
         UserPrincipal principal = new UserPrincipal(user.username(), user.role(), user.department());
         return new LoginResponse(jwtService.createToken(principal), principal.username(),
-                principal.role(), principal.department(), jwtService.validitySeconds());
+                principal.role(), principal.department(), jwtService.validitySeconds(),
+                refreshTokenService.issue(username));
     }
 
-    /** 改自己的密码：原密码不对 401，新密码至少 10 位且含字母和数字。 */
+    /** 用 Refresh Token 换一对新 Token（旧 Refresh Token 轮换吊销）；无效或过期 401。 */
+    @PostMapping("/refresh")
+    public LoginResponse refresh(@RequestBody RefreshTokenRequest request) {
+        if (request.getRefreshToken() == null || request.getRefreshToken().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Refresh Token 不能为空");
+        }
+        RefreshTokenService.RefreshResult result = refreshTokenService.refresh(request.getRefreshToken())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Refresh Token 无效或已过期"));
+        UserService.UserRow user = userService.findByUsername(result.username())
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.UNAUTHORIZED, "用户不存在"));
+        auditService.record(user.username(), "REFRESH", null, null);
+        UserPrincipal principal = new UserPrincipal(user.username(), user.role(), user.department());
+        return new LoginResponse(jwtService.createToken(principal), principal.username(),
+                principal.role(), principal.department(), jwtService.validitySeconds(), result.refreshToken());
+    }
+
+    /** 退出登录：吊销传来的 Refresh Token；不带或已失效也不报错。 */
+    @PostMapping("/logout")
+    public Map<String, Boolean> logout(@RequestBody(required = false) RefreshTokenRequest request) {
+        if (request != null && request.getRefreshToken() != null && !request.getRefreshToken().isBlank()) {
+            refreshTokenService.revoke(request.getRefreshToken());
+        }
+        return Map.of("loggedOut", true);
+    }
+
+    /** 改自己的密码：原密码不对 401，新密码至少 10 位且含字母和数字；改完吊销该用户全部 Token。 */
     @PostMapping("/change-password")
     public Map<String, Boolean> changePassword(@RequestBody ChangePasswordRequest request) {
         UserPrincipal user = DepartmentScope.requireCurrentUser();
         userService.changePassword(user.username(), request.getOldPassword(), request.getNewPassword());
+        refreshTokenService.revokeAllForUser(user.username());
         auditService.record(user.username(), "CHANGE_PASSWORD", null, null);
         return Map.of("changed", true);
     }

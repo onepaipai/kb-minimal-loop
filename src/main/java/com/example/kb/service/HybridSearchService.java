@@ -17,7 +17,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 /**
- * 混合检索：向量检索 + 关键词检索（SQL ILIKE），用 RRF（倒数排名融合）合并取前 N。
+ * 混合检索：向量检索 + 关键词检索（SQL ILIKE 候选、词频分排序），用 RRF（倒数排名融合）合并取前 N。
  * 向量分只看语义，关键词分只看字面命中，两路互补：问法换了词、向量分不够时关键词能兜底。
  * 返回的 score 是 RRF 融合分（不是余弦相似度），越大越相关；minScore 只卡向量那一路。
  */
@@ -72,8 +72,8 @@ public class HybridSearchService {
     }
 
     /**
-     * 关键词检索：问题分词后 text ILIKE 命中，按命中词数排序；权限条件与向量路一致，
-     * 且只查已发布（status 缺失的老块按已发布算，与清单逻辑一致）。
+     * 关键词检索：问题分词后 text ILIKE 命中，按词频总分排序（同一个词出现 10 次的块比出现 1 次的更相关）；
+     * 权限条件与向量路一致，且只查已发布（status 缺失的老块按已发布算，与清单逻辑一致）。
      */
     private List<RetrievedChunk> searchKeyword(String question, String department, List<String> sources) {
         List<String> tokens = tokenize(question);
@@ -107,12 +107,14 @@ public class HybridSearchService {
             params.add("%" + escapeLike(tokens.get(i)) + "%");
         }
         sql.append(") ORDER BY ");
+        // 词频分：每词在块里出现几次就加几分（出现次数 = 删掉该词前后长度差 / 词长）；只按命中词数排会把出现 1 次和 10 次的块当成一样
         for (int i = 0; i < tokens.size(); i++) {
             if (i > 0) {
                 sql.append(" + ");
             }
-            sql.append("(CASE WHEN text ILIKE ? THEN 1 ELSE 0 END)");
-            params.add("%" + escapeLike(tokens.get(i)) + "%");
+            sql.append("(LENGTH(text) - LENGTH(REPLACE(LOWER(text), LOWER(?), ''))) / LENGTH(?)");
+            params.add(tokens.get(i));
+            params.add(tokens.get(i));
         }
         sql.append(" DESC LIMIT ?");
         params.add(KEYWORD_LIMIT);

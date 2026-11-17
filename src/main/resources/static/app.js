@@ -4,6 +4,7 @@
    登录 / 上传 / 清单 / 用户管理仍走后端 /api/**。样式底子是 Tabler，布局见 styles.css。 */
 
 const TOKEN_KEY = 'kb.token';
+const REFRESH_KEY = 'kb.refreshToken';
 const USER_KEY = 'kb.user';
 const SESSIONS_KEY = 'kb.sessions';
 const DOCS_PAGE_SIZE = 20;
@@ -23,18 +24,12 @@ function showMessage(text) {
     messageEl.hidden = !text;
 }
 
-/** 带 Token 的请求；401 时回登录页，其余错误抛中文 message。 */
+/** 带 Token 的请求；401 时先用 Refresh Token 换一对新 Token 再重试一次，还不行才回登录页。 */
 async function api(path, { method = 'GET', body = null, isForm = false } = {}) {
-    const headers = {};
-    const token = localStorage.getItem(TOKEN_KEY);
-    if (token) {
-        headers.Authorization = 'Bearer ' + token;
+    let response = await doApi(path, method, body, isForm);
+    if (response.status === 401 && await tryRefresh()) {
+        response = await doApi(path, method, body, isForm);
     }
-    if (body && !isForm) {
-        headers['Content-Type'] = 'application/json';
-        body = JSON.stringify(body);
-    }
-    const response = await fetch(path, { method, headers, body });
     if (response.status === 401) {
         logout('登录已过期，请重新登录');
         throw new Error('未登录');
@@ -54,15 +49,63 @@ async function api(path, { method = 'GET', body = null, isForm = false } = {}) {
     return response.json();
 }
 
+function doApi(path, method, body, isForm) {
+    const headers = {};
+    const token = localStorage.getItem(TOKEN_KEY);
+    if (token) {
+        headers.Authorization = 'Bearer ' + token;
+    }
+    let payload = body;
+    if (payload && !isForm) {
+        headers['Content-Type'] = 'application/json';
+        payload = JSON.stringify(payload);
+    }
+    return fetch(path, { method, headers, body: payload });
+}
+
+/** 用 Refresh Token 换一对新 Token；成功返回 true，失败返回 false（不抛错，调用方决定回登录页）。 */
+async function tryRefresh() {
+    const refreshToken = localStorage.getItem(REFRESH_KEY);
+    if (!refreshToken) {
+        return false;
+    }
+    try {
+        const response = await fetch('/api/auth/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshToken }),
+        });
+        if (!response.ok) {
+            return false;
+        }
+        saveSession(await response.json());
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+
 function saveSession(login) {
     localStorage.setItem(TOKEN_KEY, login.token);
+    if (login.refreshToken) {
+        localStorage.setItem(REFRESH_KEY, login.refreshToken);
+    }
     localStorage.setItem(USER_KEY, JSON.stringify(login));
     currentUser = login;
 }
 
 /** clearChat 只在主动点退出时清本地对话记录；Token 过期回登录页时保留。 */
 function logout(message, clearChat = false) {
+    const refreshToken = localStorage.getItem(REFRESH_KEY);
+    if (refreshToken) {
+        fetch('/api/auth/logout', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshToken }),
+        }).catch(() => {});
+    }
     localStorage.removeItem(TOKEN_KEY);
+    localStorage.removeItem(REFRESH_KEY);
     localStorage.removeItem(USER_KEY);
     if (clearChat) {
         const sessions = loadSessions();
@@ -382,6 +425,15 @@ async function askOnce(request, bubble) {
     return response;
 }
 
+function fetchAskStream(request) {
+    const token = localStorage.getItem(TOKEN_KEY);
+    return fetch('/api/ask-stream', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+        body: JSON.stringify(request),
+    });
+}
+
 function appendHitsContainer(bubble) {
     const hits = document.createElement('div');
     bubble.appendChild(hits);
@@ -390,12 +442,10 @@ function appendHitsContainer(bubble) {
 
 /** 手写 SSE 解析：fetch 不能用 EventSource（POST + Authorization 头只能走 fetch）。 */
 async function askStream(request, bubble) {
-    const token = localStorage.getItem(TOKEN_KEY);
-    const response = await fetch('/api/ask-stream', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
-        body: JSON.stringify(request),
-    });
+    let response = await fetchAskStream(request);
+    if (response.status === 401 && await tryRefresh()) {
+        response = await fetchAskStream(request);
+    }
     if (response.status === 401) {
         logout('登录已过期，请重新登录');
         throw new Error('未登录');
@@ -774,16 +824,44 @@ $('uploadForm').addEventListener('submit', async (e) => {
     const form = new FormData();
     form.append('file', file);
     form.append('visibility', $('uploadVisibility').value.trim() || 'all');
+    const resultEl = $('uploadResult');
     try {
-        const result = await api('/api/ingest', { method: 'POST', body: form, isForm: true });
-        const resultEl = $('uploadResult');
+        // 异步入库：先拿到任务号，再轮询任务状态，避免大文件上传时页面一直等
+        const job = await api('/api/ingest-async', { method: 'POST', body: form, isForm: true });
         resultEl.hidden = false;
-        resultEl.textContent = '「' + result.file + '」已入库，' + result.chunks + ' 块，可见性 ' + result.visibility;
-        loadDocuments(0);
+        resultEl.textContent = '「' + job.source + '」已提交入库，处理中…';
+        const done = await pollIngestJob(job.id);
+        if (done.status === 'DONE') {
+            resultEl.textContent = '「' + done.source + '」已入库，' + done.chunks + ' 块，可见性 ' + done.visibility;
+            loadDocuments(0);
+        } else {
+            resultEl.textContent = '「' + done.source + '」入库失败：' + (done.error || '未知错误');
+        }
     } catch (err) {
         showMessage(err.message);
     }
 });
+
+/** 每 2 秒轮询一次入库任务，直到 DONE 或 FAILED；最多等 10 分钟。 */
+async function pollIngestJob(jobId) {
+    for (let i = 0; i < 300; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const response = await fetch('/api/ingest/jobs/' + jobId, {
+            headers: { Authorization: 'Bearer ' + localStorage.getItem(TOKEN_KEY) },
+        });
+        if (response.status === 401 && await tryRefresh()) {
+            continue;
+        }
+        if (!response.ok) {
+            throw new Error('查询入库任务失败（' + response.status + '）');
+        }
+        const job = await response.json();
+        if (job.status === 'DONE' || job.status === 'FAILED') {
+            return job;
+        }
+    }
+    throw new Error('入库超时，请在文档清单里确认是否已入库');
+}
 
 $('refreshDocsBtn').addEventListener('click', () => loadDocuments(docsPage));
 $('prevPageBtn').addEventListener('click', () => loadDocuments(Math.max(0, docsPage - 1)));
@@ -877,15 +955,47 @@ $('changePasswordForm').addEventListener('submit', async (e) => {
     }
 });
 
-/* 已登录过则直接进应用（Token 8 小时有效，过期后接口 401 再回登录页）。 */
-try {
-    const saved = JSON.parse(localStorage.getItem(USER_KEY) || 'null');
-    if (saved && localStorage.getItem(TOKEN_KEY)) {
-        currentUser = saved;
-        showApp();
-    } else {
-        $('loginView').hidden = false;
+/* OIDC 回调：地址里带一次性换码时先换 Token 再进应用；换完把码从地址栏清掉。 */
+async function handleOidcCallback() {
+    const params = new URLSearchParams(location.search);
+    const code = params.get('oidcCode');
+    if (!code) {
+        return;
     }
-} catch (e) {
-    logout();
+    try {
+        const response = await fetch('/api/auth/oidc/exchange', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code }),
+        });
+        if (response.ok) {
+            saveSession(await response.json());
+        }
+    } catch (e) {
+        // 换码失败就走正常登录
+    }
+    history.replaceState(null, '', location.pathname);
 }
+
+/* 已登录过则直接进应用（Token 8 小时有效，过期后接口 401 再回登录页）。 */
+(async () => {
+    await handleOidcCallback();
+    // OIDC 开了才显示企业登录按钮
+    try {
+        const status = await (await fetch('/api/auth/oidc/enabled')).json();
+        $('oidcLoginBtn').hidden = !status.enabled;
+    } catch (e) {
+        // 查不到就当没开
+    }
+    try {
+        const saved = JSON.parse(localStorage.getItem(USER_KEY) || 'null');
+        if (saved && localStorage.getItem(TOKEN_KEY)) {
+            currentUser = saved;
+            showApp();
+        } else {
+            $('loginView').hidden = false;
+        }
+    } catch (e) {
+        logout();
+    }
+})();

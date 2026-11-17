@@ -1,5 +1,6 @@
 package com.example.kb.service;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -21,12 +22,14 @@ import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 
 /**
- * 文档入库服务：txt 直读，PDF/DOC/DOCX/MD 走 Tika 解析，切块 → 向量化 → 存入 pgvector，同名文件整体替换。
+ * 文档入库服务：txt/md 直接读 UTF-8（保留 Markdown 结构供切块器按标题切），PDF/DOC/DOCX 走 Tika 解析，
+ * 切块 → 向量化 → 存入 pgvector，同名文件整体替换。
  */
 @Service
 public class IngestService {
 
     private static final String TEXT_SUFFIX = ".txt";
+    private static final String MARKDOWN_SUFFIX = ".md";
 
     private final EmbeddingStoreIngestor embeddingStoreIngestor;
     private final EmbeddingStore<TextSegment> embeddingStore;
@@ -45,12 +48,17 @@ public class IngestService {
     }
 
     /**
-     * 按后缀分流解析入库：txt 直接按 UTF-8 读，其余交给 Tika 自动识别；同名文件先入后删整体替换。
+     * 按后缀分流解析入库：txt/md 直接按 UTF-8 读（md 走 Tika 会丢标题结构），其余交给 Tika 自动识别；
+     * 同名文件先入后删整体替换。
      * status 为审批初始状态（管理员与本部门管理员直接发布，其余待审批），version 为同名替换的下一个版本号。
      */
     public IngestResponse ingest(MultipartFile file, String visibility, String status) throws IOException {
-        String fileName = file.getOriginalFilename();
-        String content = new String(file.getBytes(), StandardCharsets.UTF_8);
+        return ingestBytes(file.getBytes(), file.getOriginalFilename(), visibility, status);
+    }
+
+    /** 同 ingest，但入参是已读进内存的字节数组，供异步入库在后台线程调用。 */
+    public IngestResponse ingestBytes(byte[] bytes, String fileName, String visibility, String status) throws IOException {
+        String content = new String(bytes, StandardCharsets.UTF_8);
         if (content.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件内容为空");
         }
@@ -62,10 +70,10 @@ public class IngestService {
         metadata.put(MetadataKeys.STATUS, status);
         metadata.put(MetadataKeys.VERSION, String.valueOf(version));
         Document document;
-        if (fileName.endsWith(TEXT_SUFFIX)) {
+        if (fileName.endsWith(TEXT_SUFFIX) || fileName.endsWith(MARKDOWN_SUFFIX)) {
             document = Document.from(content, metadata);
         } else {
-            document = parseWithTika(file, metadata);
+            document = parseWithTika(bytes, metadata);
         }
         // 空内容校验放在解析之后：扫描版 PDF、纯空表格的 Word 解析不出文本，不允许静默存 0 块
         if (document.text().isBlank()) {
@@ -81,8 +89,8 @@ public class IngestService {
     /**
      * Tika 流式解析并重建 Document，手动补 source/visibility 元数据（Tika 不加，清单/删除/定向检索与权限过滤都依赖它）。
      */
-    private Document parseWithTika(MultipartFile file, Metadata metadata) throws IOException {
-        try (InputStream inputStream = file.getInputStream()) {
+    private Document parseWithTika(byte[] bytes, Metadata metadata) throws IOException {
+        try (InputStream inputStream = new ByteArrayInputStream(bytes)) {
             Document parsed;
             try {
                 parsed = tikaDocumentParser.parse(inputStream);

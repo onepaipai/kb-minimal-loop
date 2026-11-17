@@ -47,6 +47,8 @@ public class RagService {
     private static final double MIN_SCORE = 0.55;
     /** 每个会话最多保留的对话消息条数（约 10 轮） */
     private static final int MAX_MEMORY_MESSAGES = 20;
+    /** 检索无命中时的固定回答：不调模型，保证每次都一样，也不给模型编造的机会 */
+    static final String NOT_FOUND_ANSWER = "资料里没找到";
 
     /**
      * 问答的作用域：由 Controller 在请求线程里从登录用户解析好再传进来（流式问答跑在独立线程，拿不到请求线程的 SecurityContext，必须显式传）。
@@ -88,10 +90,17 @@ public class RagService {
 
     /**
      * 检索并回答：把检索到的块拼成带编号的资料段连同问题一起发给模型。
+     * 无命中时不调模型，直接回“资料里没找到”；有命中时删掉答案里超出引用范围的编号。
      */
     public AskResponse ask(AskRequest request, AskScope scope) {
         PreparedAsk prepared = prepare(request, scope);
-        String answer = chatModel.chat(prepared.messages()).aiMessage().text();
+        String answer;
+        if (prepared.hits().isEmpty()) {
+            answer = NOT_FOUND_ANSWER;
+        } else {
+            answer = sanitizeCitations(chatModel.chat(prepared.messages()).aiMessage().text(),
+                    prepared.hits().size());
+        }
         saveMemory(prepared, request.getQuestion(), answer);
 
         AskResponse response = new AskResponse();
@@ -101,13 +110,36 @@ public class RagService {
         return response;
     }
 
+    /** 删掉答案里超出本次引用范围的编号（如只有 3 块却写了 [9]），防止模型编造引用；范围内的不动。 */
+    static String sanitizeCitations(String answer, int hitCount) {
+        if (answer == null) {
+            return null;
+        }
+        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\[(\\d+)\\]").matcher(answer);
+        StringBuffer result = new StringBuffer();
+        while (matcher.find()) {
+            int n = Integer.parseInt(matcher.group(1));
+            String replacement = n >= 1 && n <= hitCount ? matcher.group(0) : "";
+            matcher.appendReplacement(result, java.util.regex.Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(result);
+        return result.toString();
+    }
+
     /**
      * 流式检索问答：先发一次引用来源，再逐 token 发答案，最后发完成；出错走 onError。
      * 多轮记忆只在完整答案拿到后存一次，绝不在每个 token 到达时存。
+     * 无命中时直接发固定回答，不调模型；流式 token 是边收边发的，引用清洗只对存进记忆的完整答案做。
      */
     public void askStream(AskRequest request, AskScope scope, StreamListener listener) {
         PreparedAsk prepared = prepare(request, scope);
         listener.onSources(prepared.hits());
+        if (prepared.hits().isEmpty()) {
+            listener.onToken(NOT_FOUND_ANSWER);
+            saveMemory(prepared, request.getQuestion(), NOT_FOUND_ANSWER);
+            listener.onComplete();
+            return;
+        }
         StringBuilder answerBuilder = new StringBuilder();
         streamingChatModel.chat(prepared.messages(), new StreamingChatResponseHandler() {
             @Override
@@ -122,7 +154,7 @@ public class RagService {
                 if (answer == null) {
                     answer = answerBuilder.toString();
                 }
-                saveMemory(prepared, request.getQuestion(), answer);
+                saveMemory(prepared, request.getQuestion(), sanitizeCitations(answer, prepared.hits().size()));
                 listener.onComplete();
             }
 
@@ -189,7 +221,13 @@ public class RagService {
                     .build();
         }
         List<ChatMessage> messages = new ArrayList<>();
-        messages.add(SystemMessage.from(SYSTEM_PROMPT));
+        String systemPrompt = SYSTEM_PROMPT;
+        if (!chunks.isEmpty()) {
+            // 引用编号范围写死在提示词里：本次几块资料就只能引用 [1] 到 [N]，模型编不出 [N+1]
+            systemPrompt += "本次共提供 " + chunks.size() + " 块资料，引用编号只能是 [1] 到 [" + chunks.size()
+                    + "]，不许编造编号；每句有事实内容的回答都要带引用。";
+        }
+        messages.add(SystemMessage.from(systemPrompt));
         if (chatMemory != null) {
             messages.addAll(chatMemory.messages());
         }

@@ -11,6 +11,10 @@ final class MetadataKeys {
     static final String STATUS = "status";
     /** 文档版本号：同名替换时 +1，从 1 起 */
     static final String VERSION = "version";
+    /** 切块器写的块元数据：块号（0 起）、块总数、章节路径（标题栈，如“请假制度 > 年假”） */
+    static final String CHUNK_INDEX = "chunk_index";
+    static final String CHUNK_TOTAL = "chunk_total";
+    static final String SECTION = "section";
 
     private MetadataKeys() {
     }

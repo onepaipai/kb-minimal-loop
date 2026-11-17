@@ -39,7 +39,8 @@ public class UserService {
     }
 
     public record UserRow(UUID id, String username, String passwordHash, String role, String department,
-                          String totpSecret, boolean totpEnabled, int failedAttempts, OffsetDateTime lockedUntil) {
+                          String totpSecret, boolean totpEnabled, int failedAttempts, OffsetDateTime lockedUntil,
+                          String oidcSubject) {
     }
 
     public record UserSummary(String username, String role, String department, OffsetDateTime createdAt) {
@@ -49,12 +50,31 @@ public class UserService {
         try {
             UserRow row = jdbcTemplate.queryForObject(
                     "SELECT id, username, password_hash, role, department, totp_secret, totp_enabled, "
-                            + "failed_attempts, locked_until FROM app_user WHERE username = ?",
+                            + "failed_attempts, locked_until, oidc_subject FROM app_user WHERE username = ?",
                     (rs, rowNum) -> new UserRow(UUID.fromString(rs.getString("id")), rs.getString("username"),
                             rs.getString("password_hash"), rs.getString("role"), rs.getString("department"),
                             rs.getString("totp_secret"), rs.getBoolean("totp_enabled"),
-                            rs.getInt("failed_attempts"), rs.getObject("locked_until", OffsetDateTime.class)),
+                            rs.getInt("failed_attempts"), rs.getObject("locked_until", OffsetDateTime.class),
+                            rs.getString("oidc_subject")),
                     username);
+            return Optional.ofNullable(row);
+        } catch (EmptyResultDataAccessException e) {
+            return Optional.empty();
+        }
+    }
+
+    /** 按 IdP 的 subject 找 OIDC 用户；subject 在库里唯一，一个企业账号只对应一个内部账号。 */
+    public Optional<UserRow> findByOidcSubject(String subject) {
+        try {
+            UserRow row = jdbcTemplate.queryForObject(
+                    "SELECT id, username, password_hash, role, department, totp_secret, totp_enabled, "
+                            + "failed_attempts, locked_until, oidc_subject FROM app_user WHERE oidc_subject = ?",
+                    (rs, rowNum) -> new UserRow(UUID.fromString(rs.getString("id")), rs.getString("username"),
+                            rs.getString("password_hash"), rs.getString("role"), rs.getString("department"),
+                            rs.getString("totp_secret"), rs.getBoolean("totp_enabled"),
+                            rs.getInt("failed_attempts"), rs.getObject("locked_until", OffsetDateTime.class),
+                            rs.getString("oidc_subject")),
+                    subject);
             return Optional.ofNullable(row);
         } catch (EmptyResultDataAccessException e) {
             return Optional.empty();
@@ -115,6 +135,53 @@ public class UserService {
         return findByUsername(username)
                 .map(user -> new UserSummary(user.username(), user.role(), user.department(), null))
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "创建用户后查询失败"));
+    }
+
+    /**
+     * OIDC 用户首次登录时建账号：默认 USER、无部门，密码是随机串（不知道，无法用密码登录）；
+     * 管理员事后用改用户接口调角色和部门。
+     */
+    public UserSummary createOidcUser(String username, String subject) {
+        validateUsername(username);
+        try {
+            jdbcTemplate.update("INSERT INTO app_user(id, username, password_hash, role, department, oidc_subject) "
+                            + "VALUES (?, ?, ?, 'USER', NULL, ?)",
+                    UUID.randomUUID(), username, passwordEncoder.encode(UUID.randomUUID().toString()), subject);
+        } catch (DuplicateKeyException e) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "用户名或企业账号已存在");
+        }
+        return findByUsername(username)
+                .map(user -> new UserSummary(user.username(), user.role(), user.department(), null))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "创建用户后查询失败"));
+    }
+
+    /** 改用户的角色与部门：校验规则与创建一致；不存在报 404。仅管理员调。 */
+    public UserSummary updateUser(String username, String role, String department) {
+        UserRow user = findByUsername(username)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "用户不存在"));
+        String cleanRole = role == null ? user.role() : role.toUpperCase(Locale.ROOT);
+        if (!ROLES.contains(cleanRole)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "role 只允许 ADMIN、DEPT_ADMIN、EDITOR、USER");
+        }
+        // department 不传保持原值，传空串表示清空；升 ADMIN 时部门自动清空
+        String cleanDepartment;
+        if ("ADMIN".equals(cleanRole)) {
+            cleanDepartment = null;
+        } else if (department == null) {
+            cleanDepartment = user.department();
+        } else if (department.isBlank()) {
+            cleanDepartment = null;
+        } else {
+            cleanDepartment = Visibility.normalize(department);
+        }
+        if ("DEPT_ADMIN".equals(cleanRole) && cleanDepartment == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "DEPT_ADMIN 必须有所属部门");
+        }
+        jdbcTemplate.update("UPDATE app_user SET role = ?, department = ? WHERE username = ?",
+                cleanRole, cleanDepartment, username);
+        return findByUsername(username)
+                .map(u -> new UserSummary(u.username(), u.role(), u.department(), null))
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "改用户后查询失败"));
     }
 
     public void changePassword(String username, String oldPassword, String newPassword) {

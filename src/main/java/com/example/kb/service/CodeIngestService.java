@@ -48,8 +48,12 @@ public class CodeIngestService {
 
     /** 先解析（语法错直接 400），成功后先入新块再删旧块，失败时旧块不动。 */
     public IngestResponse ingestJava(MultipartFile file, String visibility, String status) throws IOException {
-        String fileName = file.getOriginalFilename();
-        String source = new String(file.getBytes(), StandardCharsets.UTF_8);
+        return ingestJavaBytes(file.getBytes(), file.getOriginalFilename(), visibility, status);
+    }
+
+    /** 同 ingestJava，但入参是已读进内存的字节数组，供异步入库在后台线程调用。 */
+    public IngestResponse ingestJavaBytes(byte[] bytes, String fileName, String visibility, String status) throws IOException {
+        String source = new String(bytes, StandardCharsets.UTF_8);
         if (source.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件内容为空");
         }
@@ -62,7 +66,11 @@ public class CodeIngestService {
         String packageName = cu.getPackageDeclaration()
                 .map(declaration -> declaration.getNameAsString())
                 .orElse("");
-        TypeDeclaration<?> primaryType = cu.getPrimaryType()
+        // 注意：getPrimaryType() 是按文件名找主类，从字节数组解析时没有文件名，永远为空；这里取第一个 public 类，没有再取第一个类
+        TypeDeclaration<?> primaryType = cu.getTypes().stream()
+                .filter(TypeDeclaration::isPublic)
+                .findFirst()
+                .or(() -> cu.getTypes().stream().findFirst())
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件中没有类定义"));
         String fullClassName = packageName.isEmpty()
                 ? primaryType.getNameAsString()
@@ -113,12 +121,65 @@ public class CodeIngestService {
         return segments;
     }
 
-    /** 超大方法按行拆成多段，每段不超过 MAX_METHOD_CHARS 字符（javadoc 留在第一段）。 */
+    /** 超大方法先按空行断成逻辑段再打包，每段不超过 MAX_METHOD_CHARS 字符（javadoc 留在第一段）；单段仍超长才按行硬切。 */
     private List<String> splitMethodText(List<String> lines, int beginLine, int endLine) {
         List<String> parts = new ArrayList<>();
         StringBuilder current = new StringBuilder();
+        for (String paragraph : paragraphs(lines, beginLine, endLine)) {
+            if (paragraph.length() > MAX_METHOD_CHARS) {
+                flushMethodPart(parts, current);
+                parts.addAll(splitLines(paragraph));
+                continue;
+            }
+            if (current.length() > 0 && current.length() + 1 + paragraph.length() > MAX_METHOD_CHARS) {
+                flushMethodPart(parts, current);
+            }
+            if (current.length() > 0) {
+                current.append("\n");
+            }
+            current.append(paragraph);
+        }
+        flushMethodPart(parts, current);
+        return parts;
+    }
+
+    private void flushMethodPart(List<String> parts, StringBuilder current) {
+        if (current.length() == 0) {
+            return;
+        }
+        parts.add(current.toString().stripTrailing());
+        current.setLength(0);
+    }
+
+    /** 方法体内的空行是逻辑段的分界（一段声明、一段循环、一段返回），段内不切。 */
+    private List<String> paragraphs(List<String> lines, int beginLine, int endLine) {
+        List<String> paragraphs = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
         for (int i = beginLine; i <= endLine; i++) {
             String line = lines.get(i - 1);
+            if (line.isBlank()) {
+                if (current.length() > 0) {
+                    paragraphs.add(current.toString().stripTrailing());
+                    current = new StringBuilder();
+                }
+                continue;
+            }
+            if (current.length() > 0) {
+                current.append("\n");
+            }
+            current.append(line);
+        }
+        if (current.length() > 0) {
+            paragraphs.add(current.toString().stripTrailing());
+        }
+        return paragraphs;
+    }
+
+    /** 单段超长时的兜底：按行硬切，每段不超过 MAX_METHOD_CHARS 字符。 */
+    private List<String> splitLines(String paragraph) {
+        List<String> parts = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        for (String line : paragraph.split("\n", -1)) {
             if (current.length() > 0 && current.length() + line.length() + 1 > MAX_METHOD_CHARS) {
                 parts.add(current.toString().stripTrailing());
                 current = new StringBuilder();

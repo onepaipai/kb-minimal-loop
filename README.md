@@ -1,6 +1,6 @@
 # kb-minimal-loop —— AI 知识库最小闭环
 
-上传文档（.txt/.pdf/.doc/.docx/.md/.java）→ 递归切块 → DashScope 向量化 → 存入 Neon Postgres（pgvector）→ 提问时混合检索（向量 + 关键词，RRF 融合）→ DeepSeek 带 `[1][2]` 引用作答；另有流式问答（SSE）、Java 单文件代码知识库、四档角色与部门权限、文档审批发布、审计日志、TOTP 双因素、健康检查。
+上传文档（.txt/.pdf/.doc/.docx/.md/.java）→ 结构感知切块（800/150，标题/表格/代码围栏）→ DashScope 向量化 → 存入 Neon Postgres（pgvector）→ 提问时混合检索（向量 + 关键词，RRF 融合）→ DeepSeek 带 `[1][2]` 引用作答；另有流式问答（SSE）、Java 单文件代码知识库、四档角色与部门权限、文档审批发布、审计日志、TOTP 双因素、Refresh Token 续期、OIDC 企业登录、异步入库、健康检查。
 
 ## 技术栈
 
@@ -27,7 +27,7 @@ curl -X POST http://localhost:8080/api/ask -H "Authorization: Bearer $TOKEN" -H 
 - [架构](docs/architecture.md)——模块划分、数据流、关键决策与已知缺口
 - [接口](docs/api.md)——全部接口、SSE 事件、统一错误体
 - [部署](docs/deployment.md)——Neon、环境变量、启动
-- [验收](docs/acceptance.md)——33 条验收清单
+- [验收](docs/acceptance.md)——40 条验收清单
 
 `docs/*.txt` 为示例文档（请假 / 报销 / 考勤制度），可直接上传验证。前端企业级单页在 `src/main/resources/static/`（`index.html`、`styles.css`、`app.js`，无构建步骤，样式为 Tabler v1.7.5 的 `tabler.min.css`，启动后打开 `http://localhost:8080/`）。
 
@@ -39,28 +39,43 @@ src/main/java/com/example/kb/
 ├── config/                            # 按提供方拆分，一类 Bean 一个配置
 │   ├── ChatModelConfig.java           # DeepSeek 聊天 + 流式聊天
 │   ├── EmbeddingConfig.java           # DashScope 向量 + 切块器
-│   └── VectorStoreConfig.java         # pgvector 向量库
+│   ├── VectorStoreConfig.java         # pgvector 向量库
+│   └── AsyncConfig.java               # 异步入库线程池（ingest- 前缀，守护线程）
 ├── controller/                        # 按领域拆分，一个领域一个 Controller
-│   ├── IngestController.java          # POST /api/ingest
+│   ├── IngestController.java          # POST /api/ingest、/api/ingest-async、GET /api/ingest/jobs/{id}
 │   ├── AskController.java             # POST /api/ask、/api/ask-stream
 │   ├── DocumentController.java        # GET /api/documents、DELETE /api/document、审批
 │   ├── AuthController.java            # POST /api/auth/login、/api/auth/change-password、TOTP 双因素
+│   ├── OidcController.java            # OIDC 换码发 Token、查是否开启
 │   ├── AdminController.java           # 用户管理、审计日志、反馈统计
 │   ├── DepartmentController.java      # 部门管理（仅管理员）
 │   └── FeedbackController.java        # POST /api/feedback
 ├── security/                          # 鉴权与权限
 │   ├── SecurityConfig.java            # JWT 过滤链（登录与健康检查放行，其余 /api/** 要带 Token）
 │   ├── JwtService.java                # Token 签发与校验（HS256，8 小时）
+│   ├── RefreshTokenService.java        # Refresh Token 签发、轮换、吊销（7 天，库里只存哈希）
+│   ├── RefreshTokenStore.java          # Refresh Token 存储口
+│   ├── JdbcRefreshTokenStore.java      # Refresh Token 的 JDBC 实现
+│   ├── OidcProperties.java            # OIDC 配置（默认关闭，未配 IdP 时不存在）
+│   ├── OidcConfig.java                # OIDC 注册（开启时拉取 IdP discovery 文档）
+│   ├── OidcCodeService.java           # OIDC 一次性换码（5 分钟，用过即废）
+│   ├── OidcCodeStore.java             # OIDC 换码存储口
+│   ├── JdbcOidcCodeStore.java         # OIDC 换码的 JDBC 实现
+│   ├── OidcLoginSuccessHandler.java   # OIDC 登录成功：建账号、发换码、跳回首页
 │   ├── JwtAuthenticationFilter.java   # Bearer Token → SecurityContext
 │   ├── RateLimitFilter.java           # 数据库固定窗口限流（登录用户 120/分钟，未登录按 IP 30/分钟）
 │   ├── DepartmentScope.java           # 部门与角色权限集中判断
-│   ├── UserService.java               # 用户管理（BCrypt 密码、锁定、TOTP 字段）
+│   ├── UserService.java               # 用户管理（BCrypt 密码、锁定、TOTP 字段、OIDC 用户）
 │   ├── TotpService.java               # TOTP 双因素（RFC 6238）
 │   ├── PasswordPolicy.java            # 密码策略（至少 10 位，含字母和数字）
 │   └── AdminBootstrap.java            # 首次启动播种初始管理员
 ├── service/                           # 每个服务只做一件事
 │   ├── IngestService.java             # 文档解析入库（txt 直读，其余走 Tika）
 │   ├── CodeIngestService.java         # Java 单文件入库（JavaParser 按方法切块）
+│   ├── AsyncIngestService.java        # 异步入库提交（建任务、交后台线程）
+│   ├── IngestJobRunner.java           # 异步入库后台执行（成功记块数、失败记原因）
+│   ├── IngestJobStore.java            # 入库任务存储口
+│   ├── JdbcIngestJobStore.java        # 入库任务的 JDBC 实现
 │   ├── RagService.java                # 检索问答（整段 + 流式共用 prepare）
 │   ├── HybridSearchService.java       # 混合检索（向量 + 关键词，RRF 融合）
 │   ├── DocumentManageService.java     # 文档清单、删除、审批状态、版本号

@@ -4,6 +4,7 @@ import java.util.List;
 
 import com.example.kb.dto.AuditLogListResponse;
 import com.example.kb.dto.CreateUserRequest;
+import com.example.kb.dto.UpdateUserRequest;
 import com.example.kb.service.AuditService;
 import com.example.kb.security.DepartmentScope;
 import com.example.kb.security.UserPrincipal;
@@ -12,7 +13,9 @@ import com.example.kb.service.FeedbackService;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
@@ -60,6 +63,17 @@ public class AdminController {
     @PreAuthorize("hasRole('ADMIN') or hasRole('DEPT_ADMIN')")
     public List<UserService.UserSummary> listUsers() {
         return userService.listUsers(DepartmentScope.currentUser());
+    }
+
+    /** 改用户角色与部门：仅管理员；不存在报 404，ADMIN 升上去时部门自动清空。 */
+    @PutMapping("/users/{username}")
+    @PreAuthorize("hasRole('ADMIN')")
+    public UserService.UserSummary updateUser(@PathVariable String username, @RequestBody UpdateUserRequest request) {
+        UserPrincipal caller = DepartmentScope.requireCurrentUser();
+        UserService.UserSummary updated = userService.updateUser(username, request.getRole(), request.getDepartment());
+        auditService.record(caller.username(), "UPDATE_USER", updated.username(),
+                "role=" + updated.role() + " department=" + updated.department());
+        return updated;
     }
 
     /** 审计日志：分页，最新在前；仅管理员。 */
