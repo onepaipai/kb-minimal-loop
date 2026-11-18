@@ -46,7 +46,7 @@ public class CodeIngestService {
         this.documentManageService = documentManageService;
     }
 
-    /** 先解析（语法错直接 400），成功后先入新块再删旧块，失败时旧块不动。 */
+    /** 先解析（语法错直接 400），成功后先入新块再把旧版标成 superseded，失败时旧版不动。 */
     public IngestResponse ingestJava(MultipartFile file, String visibility, String status) throws IOException {
         return ingestJavaBytes(file.getBytes(), file.getOriginalFilename(), visibility, status);
     }
@@ -84,7 +84,7 @@ public class CodeIngestService {
         }
         Response<List<Embedding>> embeddingsResponse = embeddingModel.embedAll(segments);
         embeddingStore.addAll(embeddingsResponse.content(), segments);
-        documentManageService.removeReplaced(fileName, batch);
+        documentManageService.markSuperseded(fileName, batch);
         return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility, status);
     }
 

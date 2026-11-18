@@ -16,6 +16,7 @@ const messageEl = $('message');
 let currentUser = null;
 let docsPage = 0;
 let auditPage = 0;
+let notifPage = 0;
 let asking = false;
 let currentSessionId = null;
 
@@ -135,9 +136,11 @@ function showApp() {
     $('approvalNavBtn').hidden = !(currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN');
     $('deptNavBtn').hidden = currentUser.role !== 'ADMIN';
     $('auditNavBtn').hidden = currentUser.role !== 'ADMIN';
+    $('apikeysNavBtn').hidden = currentUser.role !== 'ADMIN';
     ensureSession();
     showView('dashboard'); // 切到总览时自动刷新统计
     loadDocuments(0);
+    refreshNotifBadge();
     if (currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN') {
         loadUsers();
     }
@@ -495,17 +498,20 @@ async function askStream(request, bubble) {
 
 /* ---------------- 视图切换 ---------------- */
 
-const VIEW_TITLES = { dashboard: '总览', chat: '智能问答', manage: '文档管理', approval: '审批',
-    departments: '部门管理', audit: '审计日志', admin: '用户管理', password: '改密码' };
+const VIEW_TITLES = { dashboard: '总览', chat: '智能问答', manage: '文档管理', notifications: '通知',
+    approval: '审批', departments: '部门管理', audit: '审计日志', admin: '用户管理',
+    apikeys: 'API 密钥', password: '改密码' };
 
 function showView(name) {
     $('dashboardView').hidden = name !== 'dashboard';
     $('chatView').hidden = name !== 'chat';
     $('manageView').hidden = name !== 'manage';
+    $('notificationsView').hidden = name !== 'notifications';
     $('approvalView').hidden = name !== 'approval';
     $('departmentsView').hidden = name !== 'departments';
     $('auditView').hidden = name !== 'audit';
     $('adminView').hidden = name !== 'admin';
+    $('apikeysView').hidden = name !== 'apikeys';
     $('passwordView').hidden = name !== 'password';
     document.querySelectorAll('.sidebar-link').forEach((link) => {
         link.classList.toggle('active', link.dataset.view === name);
@@ -514,12 +520,16 @@ function showView(name) {
     $('appView').classList.remove('sidebar-open');
     if (name === 'dashboard') {
         loadDashboard();
+    } else if (name === 'notifications') {
+        loadNotifications(notifPage);
     } else if (name === 'approval') {
         loadPending();
     } else if (name === 'departments') {
         loadDepartments();
     } else if (name === 'audit') {
         loadAuditLogs(auditPage);
+    } else if (name === 'apikeys') {
+        loadApiKeys();
     }
 }
 
@@ -554,6 +564,16 @@ async function loadDocuments(page) {
                 del.addEventListener('click', () => deleteDocument(doc.source));
                 action.appendChild(del);
             }
+            const canApprove = currentUser && (currentUser.role === 'ADMIN'
+                || (currentUser.role === 'DEPT_ADMIN' && currentUser.department === doc.visibility));
+            if (canApprove && doc.version > 1) {
+                const rollback = document.createElement('button');
+                rollback.type = 'button';
+                rollback.className = 'btn btn-outline-secondary btn-sm ms-1';
+                rollback.textContent = '回滚';
+                rollback.addEventListener('click', () => rollbackDocument(doc.source, doc.version));
+                action.appendChild(rollback);
+            }
             row.append(source, chunks, visibility, status, version, action);
             tbody.appendChild(row);
         });
@@ -579,6 +599,37 @@ async function deleteDocument(source) {
     }
 }
 
+/** 回滚：先取全部版本号，只剩当前版时没得回；让用户在旧版里挑一个，回滚后刷新清单。 */
+async function rollbackDocument(source, currentVersion) {
+    try {
+        const data = await api('/api/document/versions?source=' + encodeURIComponent(source));
+        const oldVersions = (data.versions || []).filter((v) => v < currentVersion);
+        if (oldVersions.length === 0) {
+            showMessage('「' + source + '」没有可回滚的旧版');
+            return;
+        }
+        const input = window.prompt('可回滚到：v' + oldVersions.join('、v') + '\n输入版本号：',
+            String(oldVersions[oldVersions.length - 1]));
+        if (input === null) {
+            return;
+        }
+        const version = Number.parseInt(input, 10);
+        if (!oldVersions.includes(version)) {
+            showMessage('版本号不对，只能选 v' + oldVersions.join('、v'));
+            return;
+        }
+        if (!window.confirm('确定把「' + source + '」回滚到 v' + version + ' 吗？当前版将被替换。')) {
+            return;
+        }
+        const result = await api('/api/document/rollback?source=' + encodeURIComponent(source)
+            + '&version=' + version, { method: 'POST' });
+        showMessage('已回滚「' + source + '」到 v' + result.version + '，共 ' + result.chunks + ' 块');
+        loadDocuments(docsPage);
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
 async function loadUsers() {
     try {
         const users = await api('/api/admin/users');
@@ -597,6 +648,108 @@ async function loadUsers() {
             row.append(name, role, department, created);
             tbody.appendChild(row);
         });
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+/* ---------------- 通知 ---------------- */
+
+async function loadNotifications(page) {
+    notifPage = page;
+    try {
+        const data = await api('/api/notifications?page=' + page + '&size=' + DOCS_PAGE_SIZE);
+        const listEl = $('notifList');
+        listEl.textContent = '';
+        (data.notifications || []).forEach((n) => {
+            const item = document.createElement('li');
+            item.className = 'list-group-item' + (n.read ? '' : ' list-group-item-warning');
+            if (!n.read) {
+                item.style.cursor = 'pointer';
+            }
+            const title = document.createElement('div');
+            title.textContent = (n.read ? '' : '● ') + n.title;
+            const body = document.createElement('div');
+            body.className = 'text-secondary';
+            body.textContent = n.body || '';
+            const time = document.createElement('div');
+            time.className = 'text-secondary';
+            time.textContent = n.createdAt ? n.createdAt.slice(0, 19).replace('T', ' ') : '';
+            item.append(title, body, time);
+            if (!n.read) {
+                item.addEventListener('click', async () => {
+                    await api('/api/notifications/' + n.id + '/read', { method: 'POST' });
+                    loadNotifications(notifPage);
+                });
+            }
+            listEl.appendChild(item);
+        });
+        const totalPages = Math.max(1, Math.ceil(data.total / DOCS_PAGE_SIZE));
+        $('notifPageInfo').textContent = '第 ' + (page + 1) + ' / ' + totalPages + ' 页，共 ' + data.total + ' 条，未读 ' + data.unread + ' 条';
+        $('prevNotifBtn').disabled = page <= 0;
+        $('nextNotifBtn').disabled = (page + 1) * DOCS_PAGE_SIZE >= data.total;
+        refreshNotifBadge();
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+/** 侧栏通知角标：只读未读数，失败时静默（不打扰主流程）。 */
+async function refreshNotifBadge() {
+    try {
+        const data = await api('/api/notifications?page=0&size=1');
+        const badge = $('notifBadge');
+        badge.hidden = !data.unread;
+        badge.textContent = data.unread > 99 ? '99+' : String(data.unread);
+    } catch (e) {
+        // 忽略
+    }
+}
+
+/* ---------------- API 密钥 ---------------- */
+
+async function loadApiKeys() {
+    try {
+        const keys = await api('/api/admin/api-keys');
+        const tbody = $('apiKeysTable').querySelector('tbody');
+        tbody.textContent = '';
+        keys.forEach((k) => {
+            const row = document.createElement('tr');
+            const name = document.createElement('td');
+            name.textContent = k.name;
+            const owner = document.createElement('td');
+            owner.textContent = k.username;
+            const created = document.createElement('td');
+            created.textContent = k.createdAt ? k.createdAt.slice(0, 19).replace('T', ' ') : '—';
+            const lastUsed = document.createElement('td');
+            lastUsed.textContent = k.lastUsedAt ? k.lastUsedAt.slice(0, 19).replace('T', ' ') : '从未使用';
+            const status = document.createElement('td');
+            status.textContent = k.revoked ? '已吊销' : '有效';
+            const action = document.createElement('td');
+            if (!k.revoked) {
+                const revoke = document.createElement('button');
+                revoke.type = 'button';
+                revoke.className = 'btn btn-outline-danger btn-sm';
+                revoke.textContent = '吊销';
+                revoke.addEventListener('click', () => revokeApiKey(k.id, k.name));
+                action.appendChild(revoke);
+            }
+            row.append(name, owner, created, lastUsed, status, action);
+            tbody.appendChild(row);
+        });
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+async function revokeApiKey(id, name) {
+    if (!window.confirm('确定吊销密钥「' + name + '」吗？吊销后用它调接口会报 401。')) {
+        return;
+    }
+    try {
+        await api('/api/admin/api-keys/' + id, { method: 'DELETE' });
+        showMessage('密钥「' + name + '」已吊销');
+        loadApiKeys();
     } catch (e) {
         showMessage(e.message);
     }
@@ -817,29 +970,41 @@ $('askForm').addEventListener('submit', async (e) => {
 
 $('uploadForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    const file = $('uploadFile').files[0];
-    if (!file) {
+    const files = Array.from($('uploadFile').files);
+    if (files.length === 0) {
         return;
     }
-    const form = new FormData();
-    form.append('file', file);
-    form.append('visibility', $('uploadVisibility').value.trim() || 'all');
-    const resultEl = $('uploadResult');
-    try {
-        // 异步入库：先拿到任务号，再轮询任务状态，避免大文件上传时页面一直等
-        const job = await api('/api/ingest-async', { method: 'POST', body: form, isForm: true });
-        resultEl.hidden = false;
-        resultEl.textContent = '「' + job.source + '」已提交入库，处理中…';
-        const done = await pollIngestJob(job.id);
-        if (done.status === 'DONE') {
-            resultEl.textContent = '「' + done.source + '」已入库，' + done.chunks + ' 块，可见性 ' + done.visibility;
-            loadDocuments(0);
-        } else {
-            resultEl.textContent = '「' + done.source + '」入库失败：' + (done.error || '未知错误');
+    const listEl = $('uploadList');
+    listEl.hidden = false;
+    listEl.textContent = '';
+    const visibility = $('uploadVisibility').value.trim() || 'all';
+    let doneCount = 0;
+    // 批量上传：逐个提交入库，一个完成再传下一个，避免多文件同时压向量接口
+    for (const file of files) {
+        const item = document.createElement('li');
+        item.className = 'list-group-item';
+        item.textContent = '「' + file.name + '」处理中…';
+        listEl.appendChild(item);
+        try {
+            const form = new FormData();
+            form.append('file', file);
+            form.append('visibility', visibility);
+            const job = await api('/api/ingest-async', { method: 'POST', body: form, isForm: true });
+            const done = await pollIngestJob(job.id);
+            if (done.status === 'DONE') {
+                item.textContent = '「' + done.source + '」已入库，' + done.chunks + ' 块，可见性 ' + done.visibility;
+                doneCount += 1;
+            } else {
+                item.textContent = '「' + done.source + '」入库失败：' + (done.error || '未知错误');
+            }
+        } catch (err) {
+            item.textContent = '「' + file.name + '」失败：' + err.message;
         }
-    } catch (err) {
-        showMessage(err.message);
     }
+    const resultEl = $('uploadResult');
+    resultEl.hidden = false;
+    resultEl.textContent = '已完成 ' + doneCount + ' / ' + files.length + ' 个文件';
+    loadDocuments(0);
 });
 
 /** 每 2 秒轮询一次入库任务，直到 DONE 或 FAILED；最多等 10 分钟。 */
@@ -866,6 +1031,17 @@ async function pollIngestJob(jobId) {
 $('refreshDocsBtn').addEventListener('click', () => loadDocuments(docsPage));
 $('prevPageBtn').addEventListener('click', () => loadDocuments(Math.max(0, docsPage - 1)));
 $('nextPageBtn').addEventListener('click', () => loadDocuments(docsPage + 1));
+$('refreshNotifBtn').addEventListener('click', () => loadNotifications(notifPage));
+$('readAllNotifBtn').addEventListener('click', async () => {
+    try {
+        await api('/api/notifications/read-all', { method: 'POST' });
+        loadNotifications(notifPage);
+    } catch (e) {
+        showMessage(e.message);
+    }
+});
+$('prevNotifBtn').addEventListener('click', () => loadNotifications(Math.max(0, notifPage - 1)));
+$('nextNotifBtn').addEventListener('click', () => loadNotifications(notifPage + 1));
 $('refreshApprovalBtn').addEventListener('click', () => loadPending());
 $('refreshAuditBtn').addEventListener('click', () => loadAuditLogs(auditPage));
 $('prevAuditBtn').addEventListener('click', () => loadAuditLogs(Math.max(0, auditPage - 1)));
@@ -976,6 +1152,31 @@ async function handleOidcCallback() {
     }
     history.replaceState(null, '', location.pathname);
 }
+
+$('createApiKeyForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+        const created = await api('/api/admin/api-keys', {
+            method: 'POST',
+            body: { name: $('apiKeyName').value.trim() },
+        });
+        $('newApiKey').textContent = created.key;
+        $('newApiKeyBox').hidden = false;
+        e.target.reset();
+        loadApiKeys();
+    } catch (err) {
+        showMessage(err.message);
+    }
+});
+
+$('copyApiKeyBtn').addEventListener('click', async () => {
+    try {
+        await navigator.clipboard.writeText($('newApiKey').textContent);
+        showMessage('密钥已复制');
+    } catch (e) {
+        showMessage('复制失败，请手动选中复制');
+    }
+});
 
 /* 已登录过则直接进应用（Token 8 小时有效，过期后接口 401 再回登录页）。 */
 (async () => {

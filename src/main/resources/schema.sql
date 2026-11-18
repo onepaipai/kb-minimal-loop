@@ -1,4 +1,7 @@
 CREATE EXTENSION IF NOT EXISTS vector;
+-- 模糊检索：pg_trgm 供 word_similarity 兜底错别字；trigram 索引加速 ILIKE '%词%' 与 word_similarity
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS chunk_embedding_text_trgm_idx ON chunk_embedding USING gin (text gin_trgm_ops);
 CREATE TABLE IF NOT EXISTS chunk_embedding (embedding_id UUID PRIMARY KEY, embedding vector(1024) NOT NULL, text TEXT NULL, metadata JSONB NULL);
 CREATE INDEX IF NOT EXISTS chunk_embedding_hnsw_idx ON chunk_embedding USING hnsw (embedding vector_cosine_ops);
 CREATE TABLE IF NOT EXISTS chat_memory (id TEXT PRIMARY KEY, messages JSONB NOT NULL, updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
@@ -28,3 +31,11 @@ CREATE TABLE IF NOT EXISTS oidc_code (code_hash TEXT PRIMARY KEY, username TEXT 
 -- 异步入库任务：状态 PENDING/RUNNING/DONE/FAILED，7 天前的任务每小时清理
 CREATE TABLE IF NOT EXISTS ingest_job (id UUID PRIMARY KEY, source TEXT NOT NULL, username TEXT NOT NULL, visibility TEXT NOT NULL, status TEXT NOT NULL, chunks INTEGER NOT NULL DEFAULT 0, error TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS ingest_job_username_idx ON ingest_job (username, created_at DESC);
+
+-- 站内通知：待审批提醒发给管理员，通过/驳回发给上传人；只增，已读用 is_read 标记
+CREATE TABLE IF NOT EXISTS notification (id UUID PRIMARY KEY, username TEXT NOT NULL, type TEXT NOT NULL, title TEXT NOT NULL, body TEXT NULL, related_source TEXT NULL, is_read BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS notification_username_idx ON notification (username, created_at DESC);
+
+-- 对外 API Key：只存 SHA-256 哈希，不存明文；吊销后失效；last_used_at 供管理员看调用情况
+CREATE TABLE IF NOT EXISTS api_key (id UUID PRIMARY KEY, key_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL, username TEXT NOT NULL, revoked BOOLEAN NOT NULL DEFAULT FALSE, last_used_at TIMESTAMPTZ NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS api_key_username_idx ON api_key (username);

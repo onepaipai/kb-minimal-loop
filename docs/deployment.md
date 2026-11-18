@@ -6,7 +6,7 @@
 - Neon 建好项目和数据库，连接串使用**直连端点**（不要 `-pooler` 端点）
 - DeepSeek 平台 API Key、阿里云 DashScope API Key
 
-## 环境变量（12 个，模型与数据库的 5 个必填，其余可选）
+## 环境变量（15 个，模型与数据库的 5 个必填，其余可选）
 
 | 变量 | 说明 | 示例 |
 | --- | --- | --- |
@@ -22,6 +22,9 @@
 | `OIDC_CLIENT_ID` | IdP 上注册的应用 Client ID | `kb-minimal-loop` |
 | `OIDC_CLIENT_SECRET` | IdP 上注册的应用 Client Secret | `******` |
 | `OIDC_ISSUER_URI` | IdP 的 Issuer 地址（如 Keycloak 的 realm 地址） | `https://idp.example.com/realms/company` |
+| `RERANK_ENABLED` | 神经重排开关，默认 `true`；关掉则问答只用 RRF 融合顺序，不调重排接口 | `true` |
+| `RERANK_MODEL` | 重排模型，默认 `qwen3-rerank`（`gte-rerank` 已停用） | `qwen3-rerank` |
+| `RERANK_BASE_URL` | 重排接口地址，默认 DashScope 原生接口 | `https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank` |
 
 ## 企业登录 OIDC（可选）
 

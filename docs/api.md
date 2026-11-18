@@ -35,6 +35,7 @@ curl -X POST http://localhost:8080/api/auth/logout -H "Content-Type: application
 - 登录加固：连续 5 次密码错误锁定账号 15 分钟；开了双因素的账号登录时多传 `totpCode`（6 位动态验证码，见 [双因素](#双因素认证totp)）；密码策略：至少 10 位且同时含字母和数字。
 - 限流走数据库（多实例共用）：已登录用户每分钟 120 次，未登录按 IP 每分钟 30 次，超了返回 429。
 - 企业登录（OIDC）：见 [部署](deployment.md) 配好 IdP 后，登录页出现“企业账号登录”按钮；点它跳去 IdP 登录，回来自动进应用。首次登录自动建一个 USER 账号，管理员用 `PUT /api/admin/users/{username}` 调它的角色和部门。相关接口：`GET /api/auth/oidc/enabled`（查是否开启）、`POST /api/auth/oidc/exchange`（凭回调的一次性码换 Token，5 分钟有效、用过即废）。
+- 对外 API Key：给别的系统调数据接口用，不用账号密码登录。请求头带 `X-API-Key: kb_...` 即可（不用再带 Bearer Token），权限就是 Key 创建者的角色；`/api/admin/**` 与 `/api/auth/**` 不认 Key，只能用 JWT。Key 在管理员的“API 密钥”页面创建，明文只显示一次。
 
 ## POST /api/ingest —— 上传文档入库
 
@@ -137,6 +138,22 @@ curl -X POST "http://localhost:8080/api/document/reject?source=报销制度.txt"
 ```
 
 权限与批准同规则；整篇文档的块统一改成已驳回，问答查不到。返回 `{"source":"报销制度.txt","status":"rejected","chunks":1}`。
+
+## POST /api/document/rollback —— 回滚到指定旧版
+
+```bash
+curl -X POST "http://localhost:8080/api/document/rollback?source=报销制度.txt&version=1" -H "Authorization: Bearer $TOKEN"
+```
+
+权限与批准同规则（管理员全部、部门管理员本部门）。同名重新上传时旧版不删，改成 `superseded` 留着回滚：目标版恢复成它被替换之前的状态（没批过的旧版回滚后还是待审批，不会悄悄发布），当前版改成 `superseded`。`version` 必须是比当前版更早的版本号（用 `GET /api/document/versions` 查），否则报 400；目标版不存在报 404。返回 `{"source":"报销制度.txt","version":1,"chunks":1}`。
+
+## GET /api/document/versions —— 某篇文档的全部版本号
+
+```bash
+curl "http://localhost:8080/api/document/versions?source=报销制度.txt" -H "Authorization: Bearer $TOKEN"
+```
+
+权限与批准同规则。返回 `{"source":"报销制度.txt","versions":[1,2,3]}`（从小到大，含已 superseded 的旧版），回滚下拉框用。
 
 ## DELETE /api/document?source=xxx —— 删除指定文档
 
@@ -245,6 +262,31 @@ curl http://localhost:8080/api/admin/feedback/stats -H "Authorization: Bearer $T
 ```
 
 返回 `{"total":10,"helpful":8,"helpfulRate":0.8}`。
+
+## GET /api/notifications —— 站内通知
+
+```bash
+curl "http://localhost:8080/api/notifications?page=0&size=20" -H "Authorization: Bearer $TOKEN"
+```
+
+自己的通知，最新在前：待审批提醒（发给管理员）、通过/驳回结果（发给上传人）。分页 `page` 从 0 起，`size` 1–100，默认 20。返回 `{"notifications":[{"id":"...","type":"PENDING_APPROVAL","title":"有文档待审批","body":"文档「报销制度.txt」已上传，待你审批。","relatedSource":"报销制度.txt","read":false,"createdAt":"..."}],"total":1,"unread":1,"page":0,"size":20}`。点一条通知标已读：`POST /api/notifications/{id}/read`；全部标已读：`POST /api/notifications/read-all`（返回 `{"updated":3}`）。
+
+## API 密钥管理（仅 ADMIN）
+
+```bash
+# 创建：名字 1-64 字；返回的 key 明文只出现这一次，关闭后查不到
+curl -X POST http://localhost:8080/api/admin/api-keys -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"name":"oa-同步"}'
+# 返回 {"id":"...","key":"kb_..."}
+
+# 列表（不含明文）：名字、创建者、创建于、最后使用、状态
+curl http://localhost:8080/api/admin/api-keys -H "Authorization: Bearer $TOKEN"
+
+# 吊销：不存在或已吊销返回 404
+curl -X DELETE http://localhost:8080/api/admin/api-keys/<id> -H "Authorization: Bearer $TOKEN"
+# 返回 {"id":"...","revoked":true}
+```
+
+Key 归创建者所有，权限就是创建者的角色；库里只存 SHA-256 哈希。调数据接口时请求头带 `X-API-Key: kb_...`（见[鉴权](#鉴权除登录外所有接口都要带-token)），`/api/admin/**` 与 `/api/auth/**` 不认 Key。
 
 ## 健康检查
 

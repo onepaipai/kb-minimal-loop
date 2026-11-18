@@ -4,6 +4,8 @@ import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.UUID;
 
 import com.example.kb.dto.IngestResponse;
@@ -62,9 +64,16 @@ public class IngestService {
         if (content.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件内容为空");
         }
+        // 内容没变直接跳过：不重新向量化、不重复存块（哈希按原始字节算，换行符变了也算变了）
+        String fileHash = sha256Hex(bytes);
+        if (fileHash.equals(documentManageService.findFileHash(fileName))) {
+            return IngestResponse.skipped(fileName, documentManageService.countBySource(fileName),
+                    visibility, status);
+        }
         int version = documentManageService.nextVersion(fileName);
         Metadata metadata = new Metadata();
         metadata.put(MetadataKeys.SOURCE, fileName);
+        metadata.put(MetadataKeys.FILE_HASH, fileHash);
         metadata.put(MetadataKeys.VISIBILITY, visibility);
         metadata.put(MetadataKeys.BATCH, UUID.randomUUID().toString());
         metadata.put(MetadataKeys.STATUS, status);
@@ -80,10 +89,26 @@ public class IngestService {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "文件解析后无有效文本内容（可能为扫描版 PDF 或空文档，解析器不含 OCR）");
         }
-        // 先入后删：新块入库成功才删旧块，入库中途失败（向量接口报错、断库）旧块不动
+        // 先入后标：新块入库成功才把旧版标成 superseded（不删，留着回滚），入库中途失败（向量接口报错、断库）旧版不动
         embeddingStoreIngestor.ingest(document);
-        documentManageService.removeReplaced(fileName, metadata.getString(MetadataKeys.BATCH));
+        documentManageService.markSuperseded(fileName, metadata.getString(MetadataKeys.BATCH));
         return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility, status);
+    }
+
+    /** 整个文件内容的 SHA-256（十六进制小写）：同名同内容再次上传时直接跳过。 */
+    static String sha256Hex(byte[] bytes) {
+        try {
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(bytes);
+            StringBuilder hex = new StringBuilder(digest.length * 2);
+            for (byte b : digest) {
+                hex.append(Character.forDigit((b >> 4) & 0xF, 16));
+                hex.append(Character.forDigit(b & 0xF, 16));
+            }
+            return hex.toString();
+        } catch (NoSuchAlgorithmException e) {
+            // SHA-256 是 JDK 必备算法，走到这里说明运行环境异常
+            throw new IllegalStateException("SHA-256 不可用", e);
+        }
     }
 
     /**

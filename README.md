@@ -1,6 +1,6 @@
 # kb-minimal-loop —— AI 知识库最小闭环
 
-上传文档（.txt/.pdf/.doc/.docx/.md/.java）→ 结构感知切块（800/150，标题/表格/代码围栏）→ DashScope 向量化 → 存入 Neon Postgres（pgvector）→ 提问时混合检索（向量 + 关键词，RRF 融合）→ DeepSeek 带 `[1][2]` 引用作答；另有流式问答（SSE）、Java 单文件代码知识库、四档角色与部门权限、文档审批发布、审计日志、TOTP 双因素、Refresh Token 续期、OIDC 企业登录、异步入库、健康检查。
+上传文档（.txt/.pdf/.doc/.docx/.md/.java）→ 结构感知切块（800/150，标题/表格/代码围栏）→ DashScope 向量化 → 存入 Neon Postgres（pgvector）→ 提问时混合检索（向量 + 关键词，RRF 融合，qwen3-rerank 重排）→ DeepSeek 带 `[1][2]` 引用作答（引用先过范围与文本依据两道校验）；另有流式问答（SSE）、Java 单文件代码知识库、四档角色与部门权限、文档审批发布、审计日志、TOTP 双因素、Refresh Token 续期、OIDC 企业登录、异步入库、健康检查。
 
 ## 技术栈
 
@@ -27,7 +27,7 @@ curl -X POST http://localhost:8080/api/ask -H "Authorization: Bearer $TOKEN" -H 
 - [架构](docs/architecture.md)——模块划分、数据流、关键决策与已知缺口
 - [接口](docs/api.md)——全部接口、SSE 事件、统一错误体
 - [部署](docs/deployment.md)——Neon、环境变量、启动
-- [验收](docs/acceptance.md)——40 条验收清单
+- [验收](docs/acceptance.md)——46 条验收清单
 
 `docs/*.txt` 为示例文档（请假 / 报销 / 考勤制度），可直接上传验证。前端企业级单页在 `src/main/resources/static/`（`index.html`、`styles.css`、`app.js`，无构建步骤，样式为 Tabler v1.7.5 的 `tabler.min.css`，启动后打开 `http://localhost:8080/`）。
 
@@ -77,7 +77,12 @@ src/main/java/com/example/kb/
 │   ├── IngestJobStore.java            # 入库任务存储口
 │   ├── JdbcIngestJobStore.java        # 入库任务的 JDBC 实现
 │   ├── RagService.java                # 检索问答（整段 + 流式共用 prepare）
-│   ├── HybridSearchService.java       # 混合检索（向量 + 关键词，RRF 融合）
+│   ├── CitationValidator.java         # 引用校验：编号有没有文本依据（纯函数）
+│   ├── HybridSearchService.java       # 混合检索（向量 + 关键词，RRF 融合；同义词扩展、pg_trgm 模糊兜底）
+│   ├── RerankService.java             # 神经重排：RRF 后用 qwen3-rerank 再排，失败回退
+│   ├── DashScopeRerankClient.java     # DashScope 重排接口直调
+│   ├── RerankConfig.java              # 重排专用的 RestClient Bean（带超时）
+│   ├── RerankProperties.java          # 重排配置 app.rerank.*
 │   ├── DocumentManageService.java     # 文档清单、删除、审批状态、版本号
 │   ├── DepartmentService.java         # 部门注册表
 │   ├── DepartmentBootstrap.java       # 启动时从已入库块回填部门

@@ -61,10 +61,12 @@
       <button type="button" class="sidebar-link active" data-view="dashboard">总览</button>
       <button type="button" class="sidebar-link" data-view="chat">智能问答</button>
       <button type="button" class="sidebar-link" data-view="manage">文档管理</button>
+      <button type="button" class="sidebar-link" data-view="notifications">通知 <span id="notifBadge" class="badge bg-red" hidden></span></button>
       <button type="button" class="sidebar-link" data-view="approval" id="approvalNavBtn" hidden>审批</button>
       <button type="button" class="sidebar-link" data-view="departments" id="deptNavBtn" hidden>部门管理</button>
       <button type="button" class="sidebar-link" data-view="audit" id="auditNavBtn" hidden>审计日志</button>
       <button type="button" class="sidebar-link" data-view="admin" id="adminNavBtn" hidden>用户管理</button>
+      <button type="button" class="sidebar-link" data-view="apikeys" id="apikeysNavBtn" hidden>API 密钥</button>
       <button type="button" class="sidebar-link" data-view="password">改密码</button>
     </div>
     <div class="sidebar-user">
@@ -194,8 +196,8 @@
             <form id="uploadForm">
               <div class="row g-2 align-items-end">
                 <div class="col-md-6">
-                  <label class="form-label" for="uploadFile">文件</label>
-                  <input id="uploadFile" class="form-control" type="file" required>
+                  <label class="form-label" for="uploadFile">文件（可多选，逐个入库）</label>
+                  <input id="uploadFile" class="form-control" type="file" multiple required>
                 </div>
                 <div class="col-md-3">
                   <label class="form-label" for="uploadVisibility">可见性</label>
@@ -207,6 +209,7 @@
               </div>
             </form>
             <p id="uploadResult" class="text-secondary mt-2 mb-0" hidden></p>
+            <ul id="uploadList" class="list-group mt-2" hidden></ul>
           </div>
         </div>
 
@@ -352,6 +355,65 @@
             <div class="table-responsive mt-3">
               <table id="usersTable" class="table table-vcenter">
                 <thead><tr><th>用户名</th><th>角色</th><th>部门</th><th>创建于</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="notificationsView" class="page-view" hidden>
+      <div class="manage-inner">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">通知</h2>
+          </div>
+          <div class="card-body">
+            <div class="d-flex align-items-center gap-2 mb-3">
+              <button id="refreshNotifBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+              <button id="readAllNotifBtn" type="button" class="btn btn-outline-secondary btn-sm">全部标已读</button>
+              <span id="notifPageInfo" class="text-secondary"></span>
+            </div>
+            <ul id="notifList" class="list-group"></ul>
+            <div class="d-flex gap-2 mt-3">
+              <button id="prevNotifBtn" type="button" class="btn btn-outline-secondary btn-sm">上一页</button>
+              <button id="nextNotifBtn" type="button" class="btn btn-outline-secondary btn-sm">下一页</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="apikeysView" class="page-view" hidden>
+      <div class="manage-inner">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">API 密钥（仅管理员）</h2>
+          </div>
+          <div class="card-body">
+            <p class="text-secondary">给别的系统调问答、入库接口用，请求头带 <code>X-API-Key</code>；权限就是创建者的角色，管理接口不认 Key。</p>
+            <form id="createApiKeyForm">
+              <div class="row g-2 align-items-end">
+                <div class="col-md-6">
+                  <label class="form-label" for="apiKeyName">名字</label>
+                  <input id="apiKeyName" class="form-control" type="text" required maxlength="64" placeholder="如：oa-同步">
+                </div>
+                <div class="col-md-3">
+                  <button type="submit" class="btn btn-primary w-100">创建密钥</button>
+                </div>
+              </div>
+            </form>
+            <div id="newApiKeyBox" class="alert alert-warning mt-3" hidden>
+              <div>新密钥只显示这一次，关闭后查不到，请现在复制保存：</div>
+              <div class="d-flex gap-2 mt-2">
+                <code id="newApiKey" class="text-break"></code>
+                <button id="copyApiKeyBtn" type="button" class="btn btn-outline-secondary btn-sm">复制</button>
+              </div>
+            </div>
+            <div class="table-responsive mt-3">
+              <table id="apiKeysTable" class="table table-vcenter">
+                <thead><tr><th>名字</th><th>创建者</th><th>创建于</th><th>最后使用</th><th>状态</th><th></th></tr></thead>
                 <tbody></tbody>
               </table>
             </div>

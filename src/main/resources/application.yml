@@ -27,6 +27,11 @@ langchain4j:
     model-name: text-embedding-v4
 
 app:
+  rerank:
+    # 神经重排：问答检索后用 qwen3-rerank 对候选块再排一遍；失败时回退 RRF 顺序，Key 复用 DASHSCOPE_API_KEY
+    enabled: ${RERANK_ENABLED:true}
+    model: ${RERANK_MODEL:qwen3-rerank}
+    base-url: ${RERANK_BASE_URL:https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank}
   oidc:
     # 企业登录（通用 OIDC）：默认关闭；开启需在 IdP 注册应用并配这 4 个值，回调地址为 {baseUrl}/login/oauth2/code/kb
     enabled: ${OIDC_ENABLED:false}

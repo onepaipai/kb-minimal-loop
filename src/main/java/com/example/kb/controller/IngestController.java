@@ -15,6 +15,7 @@ import com.example.kb.service.CodeIngestService;
 import com.example.kb.service.DepartmentService;
 import com.example.kb.service.IngestJobStore;
 import com.example.kb.service.IngestService;
+import com.example.kb.service.NotificationService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -41,16 +42,19 @@ public class IngestController {
     private final AuditService auditService;
     private final AsyncIngestService asyncIngestService;
     private final IngestJobStore jobStore;
+    private final NotificationService notificationService;
 
     public IngestController(IngestService ingestService, CodeIngestService codeIngestService,
                             DepartmentService departmentService, AuditService auditService,
-                            AsyncIngestService asyncIngestService, IngestJobStore jobStore) {
+                            AsyncIngestService asyncIngestService, IngestJobStore jobStore,
+                            NotificationService notificationService) {
         this.ingestService = ingestService;
         this.codeIngestService = codeIngestService;
         this.departmentService = departmentService;
         this.auditService = auditService;
         this.asyncIngestService = asyncIngestService;
         this.jobStore = jobStore;
+        this.notificationService = notificationService;
     }
 
     /** 上传文档并切块入库，支持 .txt/.pdf/.doc/.docx/.md/.java；visibility 可选，不传默认全员可见。 */
@@ -67,6 +71,7 @@ public class IngestController {
         }
         auditService.record(prep.user().username(), "UPLOAD", prep.fileName(),
                 "visibility=" + prep.visibility() + " status=" + prep.status());
+        notifyIfPending(prep);
         return response;
     }
 
@@ -81,6 +86,7 @@ public class IngestController {
                 prep.lowerName().endsWith(JAVA_SUFFIX), prep.visibility(), prep.status(), prep.user().username());
         auditService.record(prep.user().username(), "UPLOAD", prep.fileName(),
                 "async jobId=" + job.id() + " visibility=" + prep.visibility() + " status=" + prep.status());
+        notifyIfPending(prep);
         return job;
     }
 
@@ -94,6 +100,13 @@ public class IngestController {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "任务不存在");
         }
         return job;
+    }
+
+    /** 待审批的上传给管理员发提醒；直接发布的（status=approved）不发。 */
+    private void notifyIfPending(UploadPrep prep) {
+        if ("pending".equals(prep.status())) {
+            notificationService.notifyPendingApproval(prep.fileName(), prep.visibility());
+        }
     }
 
     /** 上传前的公共校验：权限、可见性、部门登记、审批初始状态、后缀白名单。 */

@@ -10,6 +10,7 @@ import com.example.kb.service.AuditService;
 import com.example.kb.security.DepartmentScope;
 import com.example.kb.security.UserPrincipal;
 import com.example.kb.service.DocumentManageService;
+import com.example.kb.service.NotificationService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -28,10 +29,13 @@ public class DocumentController {
 
     private final DocumentManageService documentManageService;
     private final AuditService auditService;
+    private final NotificationService notificationService;
 
-    public DocumentController(DocumentManageService documentManageService, AuditService auditService) {
+    public DocumentController(DocumentManageService documentManageService, AuditService auditService,
+                              NotificationService notificationService) {
         this.documentManageService = documentManageService;
         this.auditService = auditService;
+        this.notificationService = notificationService;
     }
 
     /**
@@ -76,6 +80,7 @@ public class DocumentController {
         DepartmentScope.requireCanApprove(user, visibility);
         int chunks = documentManageService.setStatus(source, "approved");
         auditService.record(user.username(), "APPROVE", source, "chunks=" + chunks);
+        notificationService.notifyDecision(source, user.username(), true);
         return Map.of("source", source, "status", "approved", "chunks", chunks);
     }
 
@@ -87,7 +92,29 @@ public class DocumentController {
         DepartmentScope.requireCanApprove(user, visibility);
         int chunks = documentManageService.setStatus(source, "rejected");
         auditService.record(user.username(), "REJECT", source, "chunks=" + chunks);
+        notificationService.notifyDecision(source, user.username(), false);
         return Map.of("source", source, "status", "rejected", "chunks", chunks);
+    }
+
+    /** 回滚到指定旧版：目标版恢复成被替换之前的状态，当前版改成 superseded。 */
+    @PostMapping("/document/rollback")
+    public Map<String, Object> rollbackDocument(@RequestParam("source") String source,
+                                                @RequestParam("version") int version) {
+        UserPrincipal user = DepartmentScope.requireCurrentUser();
+        String visibility = requireDocumentVisibility(source);
+        DepartmentScope.requireCanApprove(user, visibility);
+        int chunks = documentManageService.rollback(source, version);
+        auditService.record(user.username(), "ROLLBACK", source, "version=" + version + ",chunks=" + chunks);
+        return Map.of("source", source, "version", version, "chunks", chunks);
+    }
+
+    /** 某篇文档的全部版本号（回滚下拉框用）：管理员与本部门管理员可看。 */
+    @GetMapping("/document/versions")
+    public Map<String, Object> documentVersions(@RequestParam("source") String source) {
+        UserPrincipal user = DepartmentScope.requireCurrentUser();
+        String visibility = requireDocumentVisibility(source);
+        DepartmentScope.requireCanApprove(user, visibility);
+        return Map.of("source", source, "versions", documentManageService.listVersions(source));
     }
 
     private String requireDocumentVisibility(String source) {

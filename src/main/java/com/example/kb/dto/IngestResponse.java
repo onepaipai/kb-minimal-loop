@@ -9,6 +9,8 @@ public class IngestResponse {
     private int chunks;
     private String visibility;
     private String status;
+    /** 同名同内容再次上传时为 true：这次没重新入库，chunks 是已入库的块数 */
+    private boolean skipped;
 
     public static IngestResponse of(String file, int chunks, String visibility, String status) {
         IngestResponse response = new IngestResponse();
@@ -16,6 +18,13 @@ public class IngestResponse {
         response.setChunks(chunks);
         response.setVisibility(visibility);
         response.setStatus(status);
+        return response;
+    }
+
+    /** 同名同内容再次上传：不重新入库，chunks 为已入库的块数，skipped 标记这次没干活。 */
+    public static IngestResponse skipped(String file, int chunks, String visibility, String status) {
+        IngestResponse response = of(file, chunks, visibility, status);
+        response.setSkipped(true);
         return response;
     }
 
@@ -49,5 +58,13 @@ public class IngestResponse {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public boolean isSkipped() {
+        return skipped;
+    }
+
+    public void setSkipped(boolean skipped) {
+        this.skipped = skipped;
     }
 }

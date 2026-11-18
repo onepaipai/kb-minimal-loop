@@ -39,7 +39,8 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http, JwtAuthenticationFilter jwtFilter,
-                                                   RateLimitFilter rateLimitFilter, OidcProperties oidcProperties,
+                                                   ApiKeyAuthFilter apiKeyFilter, RateLimitFilter rateLimitFilter,
+                                                   OidcProperties oidcProperties,
                                                    ObjectProvider<OidcLoginSuccessHandler> oidcSuccessHandler) throws Exception {
         http
                 .csrf(AbstractHttpConfigurer::disable)
@@ -56,6 +57,7 @@ public class SecurityConfig {
                                 writeError(response, HttpStatus.UNAUTHORIZED, "未登录或登录已过期", request))
                         .accessDeniedHandler((request, response, e) ->
                                 writeError(response, HttpStatus.FORBIDDEN, "没有权限执行该操作", request)))
+                .addFilterBefore(apiKeyFilter, JwtAuthenticationFilter.class)
                 .addFilterBefore(jwtFilter, UsernamePasswordAuthenticationFilter.class)
                 .addFilterAfter(rateLimitFilter, JwtAuthenticationFilter.class);
         // OIDC 只在配了 IdP 时接管 /oauth2/authorization/kb；不开时这条不存在

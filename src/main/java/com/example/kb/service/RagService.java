@@ -90,7 +90,7 @@ public class RagService {
 
     /**
      * 检索并回答：把检索到的块拼成带编号的资料段连同问题一起发给模型。
-     * 无命中时不调模型，直接回“资料里没找到”；有命中时删掉答案里超出引用范围的编号。
+     * 无命中时不调模型，直接回“资料里没找到”；有命中时先删超出引用范围的编号，再校验每个引用有没有文本依据。
      */
     public AskResponse ask(AskRequest request, AskScope scope) {
         PreparedAsk prepared = prepare(request, scope);
@@ -98,8 +98,10 @@ public class RagService {
         if (prepared.hits().isEmpty()) {
             answer = NOT_FOUND_ANSWER;
         } else {
-            answer = sanitizeCitations(chatModel.chat(prepared.messages()).aiMessage().text(),
-                    prepared.hits().size());
+            answer = CitationValidator.validate(
+                    sanitizeCitations(chatModel.chat(prepared.messages()).aiMessage().text(),
+                            prepared.hits().size()),
+                    chunkTexts(prepared.hits()));
         }
         saveMemory(prepared, request.getQuestion(), answer);
 
@@ -154,7 +156,8 @@ public class RagService {
                 if (answer == null) {
                     answer = answerBuilder.toString();
                 }
-                saveMemory(prepared, request.getQuestion(), sanitizeCitations(answer, prepared.hits().size()));
+                saveMemory(prepared, request.getQuestion(), CitationValidator.validate(
+                        sanitizeCitations(answer, prepared.hits().size()), chunkTexts(prepared.hits())));
                 listener.onComplete();
             }
 
@@ -233,6 +236,11 @@ public class RagService {
         }
         messages.add(UserMessage.from(prompt));
         return new PreparedAsk(messages, chatMemory, hits, new ArrayList<>(distinctSources));
+    }
+
+    /** 引用校验用的块文本（按引用编号顺序）：第 n 块对应 [n]。 */
+    private static List<String> chunkTexts(List<ReferenceHit> hits) {
+        return hits.stream().map(ReferenceHit::getText).toList();
     }
 
     /** 历史里只存问答原文，不含本轮资料段，避免上下文重复膨胀。 */
