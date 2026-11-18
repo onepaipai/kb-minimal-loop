@@ -32,8 +32,9 @@ import org.springframework.web.server.ResponseStatusException;
 @RequestMapping("/api")
 public class IngestController {
 
-    /** 支持上传的文件后缀白名单（不区分大小写） */
-    private static final Set<String> SUPPORTED_SUFFIXES = Set.of(".txt", ".pdf", ".doc", ".docx", ".md", ".java");
+    /** 支持上传的文件后缀白名单（不区分大小写）：Office 文档走 Tika 解析 */
+    private static final Set<String> SUPPORTED_SUFFIXES = Set.of(".txt", ".pdf", ".doc", ".docx", ".md", ".java",
+            ".xls", ".xlsx", ".ppt", ".pptx");
     private static final String JAVA_SUFFIX = ".java";
 
     private final IngestService ingestService;
@@ -57,7 +58,7 @@ public class IngestController {
         this.notificationService = notificationService;
     }
 
-    /** 上传文档并切块入库，支持 .txt/.pdf/.doc/.docx/.md/.java；visibility 可选，不传默认全员可见。 */
+    /** 上传文档并切块入库，支持 .txt/.pdf/.doc/.docx/.md/.java/.xls/.xlsx/.ppt/.pptx；visibility 可选，不传默认全员可见。 */
     @PostMapping("/ingest")
     public IngestResponse ingest(@RequestParam("file") MultipartFile file,
                                  @RequestParam(value = "visibility", required = false) String visibility) throws IOException {
@@ -120,7 +121,8 @@ public class IngestController {
         String fileName = file.getOriginalFilename();
         String lowerName = fileName == null ? "" : fileName.toLowerCase(Locale.ROOT);
         if (SUPPORTED_SUFFIXES.stream().noneMatch(lowerName::endsWith)) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "仅支持 .txt/.pdf/.doc/.docx/.md/.java 文件");
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "仅支持 .txt/.pdf/.doc/.docx/.md/.java/.xls/.xlsx/.ppt/.pptx 文件");
         }
         return new UploadPrep(user, fileName, lowerName, effectiveVisibility, status);
     }

@@ -76,7 +76,8 @@ public class IngestService {
         metadata.put(MetadataKeys.FILE_HASH, fileHash);
         metadata.put(MetadataKeys.VISIBILITY, visibility);
         metadata.put(MetadataKeys.BATCH, UUID.randomUUID().toString());
-        metadata.put(MetadataKeys.STATUS, status);
+        // 先以 pending 入库（问答查不到）：入库中途断了旧版还活着，发布那一步再一个事务里改成目标状态并 supersede 旧版
+        metadata.put(MetadataKeys.STATUS, "pending");
         metadata.put(MetadataKeys.VERSION, String.valueOf(version));
         Document document;
         if (fileName.endsWith(TEXT_SUFFIX) || fileName.endsWith(MARKDOWN_SUFFIX)) {
@@ -84,14 +85,16 @@ public class IngestService {
         } else {
             document = parseWithTika(bytes, metadata);
         }
-        // 空内容校验放在解析之后：扫描版 PDF、纯空表格的 Word 解析不出文本，不允许静默存 0 块
+        // 空内容校验放在解析之后：扫描版 PDF、纯空表格的 Word 解析不出文本，不允许静默存 0 块；
+        // 扫描版 PDF 要读出文字需机器装 Tesseract（OCR 由 Tika 调它做，没装时这里就是空）
         if (document.text().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "文件解析后无有效文本内容（可能为扫描版 PDF 或空文档，解析器不含 OCR）");
+                    "文件解析后无有效文本内容（可能是扫描版 PDF：服务器需安装 Tesseract 才支持 OCR，或为空文档）");
         }
-        // 先入后标：新块入库成功才把旧版标成 superseded（不删，留着回滚），入库中途失败（向量接口报错、断库）旧版不动
+        // 先入后发布：新块入库成功才一个事务里改成目标状态并把旧版标成 superseded（不删，留着回滚），
+        // 入库中途失败（向量接口报错、断库）旧版不动，新版 pending 不可见
         embeddingStoreIngestor.ingest(document);
-        documentManageService.markSuperseded(fileName, metadata.getString(MetadataKeys.BATCH));
+        documentManageService.publishVersion(fileName, metadata.getString(MetadataKeys.BATCH), status);
         return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility, status);
     }
 
@@ -121,7 +124,7 @@ public class IngestService {
                 parsed = tikaDocumentParser.parse(inputStream);
             } catch (BlankDocumentException e) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                        "文件解析后无有效文本内容（可能为扫描版 PDF 或纯图片文档，解析器不含 OCR）");
+                        "文件解析后无有效文本内容（可能是扫描版 PDF：服务器需安装 Tesseract 才支持 OCR，或为纯图片文档）");
             } catch (RuntimeException e) {
                 // Tika 对损坏/无法识别的文件统一包成 RuntimeException，按 400 处理
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件解析失败（格式损坏或无法识别）");

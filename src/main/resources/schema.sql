@@ -37,5 +37,8 @@ CREATE TABLE IF NOT EXISTS notification (id UUID PRIMARY KEY, username TEXT NOT 
 CREATE INDEX IF NOT EXISTS notification_username_idx ON notification (username, created_at DESC);
 
 -- 对外 API Key：只存 SHA-256 哈希，不存明文；吊销后失效；last_used_at 供管理员看调用情况
-CREATE TABLE IF NOT EXISTS api_key (id UUID PRIMARY KEY, key_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL, username TEXT NOT NULL, revoked BOOLEAN NOT NULL DEFAULT FALSE, last_used_at TIMESTAMPTZ NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+-- scope：all（除管理接口外都能调，等同于 Key 主人的角色）或 ask（只能问答与看清单）；expires_at 为空表示永不过期
+CREATE TABLE IF NOT EXISTS api_key (id UUID PRIMARY KEY, key_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL, username TEXT NOT NULL, revoked BOOLEAN NOT NULL DEFAULT FALSE, last_used_at TIMESTAMPTZ NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), scope TEXT NOT NULL DEFAULT 'all', expires_at TIMESTAMPTZ NULL);
+ALTER TABLE api_key ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'all';
+ALTER TABLE api_key ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NULL;
 CREATE INDEX IF NOT EXISTS api_key_username_idx ON api_key (username);

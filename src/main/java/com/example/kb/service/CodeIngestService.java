@@ -46,7 +46,7 @@ public class CodeIngestService {
         this.documentManageService = documentManageService;
     }
 
-    /** 先解析（语法错直接 400），成功后先入新块再把旧版标成 superseded，失败时旧版不动。 */
+    /** 先解析（语法错直接 400），成功后先入新块再发布（一个事务里改状态并 supersede 旧版），失败时旧版不动。 */
     public IngestResponse ingestJava(MultipartFile file, String visibility, String status) throws IOException {
         return ingestJavaBytes(file.getBytes(), file.getOriginalFilename(), visibility, status);
     }
@@ -77,14 +77,15 @@ public class CodeIngestService {
                 : packageName + "." + primaryType.getNameAsString();
         String batch = UUID.randomUUID().toString();
         int version = documentManageService.nextVersion(fileName);
+        // 新块先以 pending 入库（问答查不到），发布那一步再一个事务里改成目标状态并 supersede 旧版
         List<TextSegment> segments = buildSegments(fileName, fullClassName, packageName, source, cu, visibility, batch,
-                status, version);
+                "pending", version);
         if (segments.isEmpty()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件解析后没有可入库的代码块");
         }
         Response<List<Embedding>> embeddingsResponse = embeddingModel.embedAll(segments);
         embeddingStore.addAll(embeddingsResponse.content(), segments);
-        documentManageService.markSuperseded(fileName, batch);
+        documentManageService.publishVersion(fileName, batch, status);
         return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility, status);
     }
 

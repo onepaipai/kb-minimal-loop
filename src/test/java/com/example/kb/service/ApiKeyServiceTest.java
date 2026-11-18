@@ -14,6 +14,7 @@ import org.springframework.jdbc.core.RowMapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -34,7 +35,7 @@ class ApiKeyServiceTest {
 
     @Test
     void createStoresOnlyHash() {
-        ApiKeyService.CreatedKey created = service().create("test-key", "admin");
+        ApiKeyService.CreatedKey created = service().create("test-key", "admin", null, null);
         assertTrue(created.rawKey().startsWith(ApiKeyService.KEY_PREFIX));
         assertEquals(ApiKeyService.KEY_PREFIX.length() + 32, created.rawKey().length());
         ArgumentCaptor<Object[]> args = ArgumentCaptor.forClass(Object[].class);
@@ -42,15 +43,38 @@ class ApiKeyServiceTest {
         assertEquals(ApiKeyService.sha256Hex(created.rawKey()), args.getValue()[1]);
         assertEquals("test-key", args.getValue()[2]);
         assertEquals("admin", args.getValue()[3]);
+        assertEquals(ApiKeyService.SCOPE_ALL, args.getValue()[4]);
+        assertEquals(null, args.getValue()[5]);
     }
 
     @Test
-    void validateReturnsOwnerAndTouchesLastUsed() {
+    void createStoresScopeAndExpiry() {
+        service().create("ask-key", "admin", "ask", 90);
+        ArgumentCaptor<Object[]> args = ArgumentCaptor.forClass(Object[].class);
+        verify(jdbcTemplate).update(anyString(), args.capture());
+        assertEquals(ApiKeyService.SCOPE_ASK, args.getValue()[4]);
+        assertTrue(args.getValue()[5] != null);
+    }
+
+    @Test
+    void createRejectsBadScopeAndExpiry() {
+        assertThrows(IllegalArgumentException.class,
+                () -> service().create("k", "admin", "write", null));
+        assertThrows(IllegalArgumentException.class,
+                () -> service().create("k", "admin", "all", 0));
+        assertThrows(IllegalArgumentException.class,
+                () -> service().create("k", "admin", "all", ApiKeyService.MAX_EXPIRES_DAYS + 1));
+    }
+
+    @Test
+    void validateReturnsOwnerAndScopeAndTouchesLastUsed() {
         UserPrincipal owner = new UserPrincipal("editor", "EDITOR", null);
         when(jdbcTemplate.query(anyString(), any(RowMapper.class), any(Object[].class)))
-                .thenReturn(List.of(owner));
-        Optional<UserPrincipal> result = service().validate("kb_abc");
-        assertEquals(Optional.of(owner), result);
+                .thenReturn(List.of(new ApiKeyService.ValidatedKey(owner, ApiKeyService.SCOPE_ASK)));
+        Optional<ApiKeyService.ValidatedKey> result = service().validate("kb_abc");
+        assertTrue(result.isPresent());
+        assertEquals(owner, result.get().principal());
+        assertEquals(ApiKeyService.SCOPE_ASK, result.get().scope());
         verify(jdbcTemplate).update(anyString(), any(Object[].class));
     }
 

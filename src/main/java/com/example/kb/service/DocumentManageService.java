@@ -13,6 +13,7 @@ import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
 /**
@@ -236,5 +237,31 @@ public class DocumentManageService {
                 + "to_jsonb('superseded'::text)), '{prev_status}', "
                 + "to_jsonb(COALESCE(metadata->>'status','approved'))) "
                 + "WHERE metadata->>'source' = ? AND COALESCE(metadata->>'batch', '') <> ?", source, keepBatch);
+    }
+
+    /**
+     * 同名替换的发布一步：新版块先以 pending 入库（问答查不到），这里一个事务里把它改成目标状态，
+     * 同时把其余旧版标成 superseded。入库中途断了（向量接口报错、断库）发布没跑，旧版还活着、新版不可见，
+     * 问答不会同时看到新旧两版；发布本身是原子的，断在中间会整体回滚。
+     */
+    @Transactional
+    public void publishVersion(String source, String batch, String status) {
+        jdbcTemplate.update("UPDATE " + TABLE
+                + " SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{status}', to_jsonb(?::text)) "
+                + "WHERE metadata->>'source' = ? AND COALESCE(metadata->>'batch', '') = ?",
+                status, source, batch);
+        markSuperseded(source, batch);
+    }
+
+    /**
+     * 清理旧版：每篇文档只保留最新 keep 个 superseded 旧版，更早的彻底删除（回滚只认保留的版本）。
+     * 只删 superseded 的块，当前版（pending/approved/rejected）永远不动；返回删除的块数。
+     */
+    public int purgeOldSuperseded(int keep) {
+        return jdbcTemplate.update("DELETE FROM " + TABLE + " c "
+                + "WHERE COALESCE(c.metadata->>'status', 'approved') = 'superseded' "
+                + "AND CAST(NULLIF(c.metadata->>'version', '') AS INTEGER) <= "
+                + "(SELECT COALESCE(max(CAST(NULLIF(metadata->>'version', '') AS INTEGER)), 0) - ? "
+                + "FROM " + TABLE + " WHERE metadata->>'source' = c.metadata->>'source')", keep);
     }
 }

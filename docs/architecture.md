@@ -4,7 +4,7 @@
 
 - `config/`：按提供方拆分。`ChatModelConfig`（DeepSeek 聊天 + 流式）、`EmbeddingConfig`（DashScope 向量 + 切块器）、`VectorStoreConfig`（pgvector）。Bean 方法名即 Bean 名，改名会影响注入。
 - `controller/`：按领域拆分。`IngestController`（入库）、`AskController`（问答 + 流式）、`DocumentController`（清单 + 删除 + 审批）、`AuthController`（登录 + 改密码 + TOTP 双因素）、`AdminController`（用户管理 + 审计日志 + 反馈统计）、`DepartmentController`（部门管理，仅 ADMIN）、`FeedbackController`（问答反馈）。路由见 [接口](api.md)。
-- `service/`：`IngestService`（文档入库）、`CodeIngestService`（Java 单文件入库）、`RagService`（检索问答）、`HybridSearchService`（向量 + 关键词 RRF 融合检索、同义词扩展、pg_trgm 模糊兜底）、`RerankService`（神经重排，失败回退 RRF）、`DashScopeRerankClient`（DashScope qwen3-rerank 直调）、`CitationValidator`（引用文本依据校验）、`DocumentManageService`（清单/删除/审批状态/版本号/回滚）、`MetadataKeys`（块元数据键集中定义）、`JdbcChatMemoryStore`（会话记忆落库）、`ChatMemoryCleanup`（过期会话与限流窗口定时清理）、`DepartmentService`（部门注册表）、`DepartmentBootstrap`（启动时从已入库块回填部门）、`AuditService`（审计日志）、`FeedbackService`（问答反馈统计）、`NotificationService`（站内通知）、`ApiKeyService`（对外 API Key）、`UserService`（在 `security/` 下，用户管理）。
+- `service/`：`IngestService`（文档入库）、`CodeIngestService`（Java 单文件入库）、`RagService`（检索问答）、`StreamingCitationFilter`（流式引用过滤，边收边删超范围编号）、`HybridSearchService`（向量 + 关键词 RRF 融合检索、同义词扩展、pg_trgm 模糊兜底）、`RerankService`（神经重排，失败回退 RRF）、`DashScopeRerankClient`（DashScope qwen3-rerank 直调）、`CitationValidator`（引用文本依据校验）、`DocumentManageService`（清单/删除/审批状态/版本号/回滚/旧版清理）、`MetadataKeys`（块元数据键集中定义）、`JdbcChatMemoryStore`（会话记忆落库）、`ChatMemoryCleanup`（过期会话与限流窗口定时清理）、`DepartmentService`（部门注册表）、`DepartmentBootstrap`（启动时从已入库块回填部门）、`AuditService`（审计日志）、`FeedbackService`（问答反馈统计）、`NotificationService`（站内通知）、`ApiKeyService`（对外 API Key）、`UserService`（在 `security/` 下，用户管理）。
 - `security/`：`SecurityConfig`（JWT 过滤链）、`JwtService`（签发/校验）、`JwtAuthenticationFilter`、`ApiKeyAuthFilter`（请求头 `X-API-Key` 鉴权，只对非管理接口生效）、`RateLimitFilter`（数据库固定窗口限流）、`DepartmentScope`（部门与角色权限集中判断）、`AdminBootstrap`（初始管理员播种）、`TotpService`（TOTP 双因素）、`PasswordPolicy`（密码策略）。
 - `common/exception/`：`GlobalExceptionHandler` 统一异常处理，`ErrorResponse` 统一错误体。
 - `dto/`：接口出入参，不做领域拆分（平铺最直观）。
@@ -22,8 +22,10 @@
 
 - `.txt/.md` 直接按 UTF-8 读（md 保留标题结构供切块器按标题切）；`.pdf/.doc/.docx` 走 Tika 解析（内嵌 Tika 3.2.3）。
 - 切块器（`DocumentChunker`）按标题、表格、代码围栏、段落分块：每块带章节路径前缀（如 `【章节：请假制度 > 年假】`）与块号/总数/章节元数据；重叠 150 字只在句末断开，不断句；表格与代码围栏不拦腰切，超长表格按行分组、超长围栏按行分组。已入库的旧文档不受影响，重新上传才会按新规则切。
-- 同名文件整体替换，先入后标：新块带本次入库的 `batch` 批次号入库成功后，旧版块不删，改成 `superseded`（问答与清单自动排除），同时把改之前的状态记到块元数据 `prev_status`；入库中途失败（向量接口报错、断库）旧版不动。版本号每次同名替换 +1（首版 v1），存在块元数据 `version` 里。回滚（`POST /api/document/rollback`）：目标版恢复成 `prev_status`（没批过的旧版回滚后还是待审批，不会悄悄发布），当前版改成 `superseded`；审批（批准/驳回）只动当前版的块，不碰已 superseded 的旧版。
-- 通知：上传待审批时给管理员发提醒（部门文档再发给该部门的部门管理员），批准/驳回后给上传人发结果（上传人从最近一次入库任务里找，7 天前的任务已被清理时不发）；通知失败不影响上传/审批本身（内部 catch 记 WARN）。对外 API Key：`kb_` + 32 位随机串，库里只存 SHA-256 哈希，明文只在创建时返回一次；请求头 `X-API-Key` 鉴权，权限就是 Key 创建者的角色，`/api/admin/**` 与 `/api/auth/**` 不认 Key。
+- 同名文件整体替换，先入后发布：新块先以 `pending` 入库（问答查不到），再由 `DocumentManageService.publishVersion` 一个事务里改成目标状态并把旧版标成 `superseded`；入库中途失败（向量接口报错、断库）发布没跑，旧版还活着、新版不可见，问答不会同时看到新旧两版。旧版不删，留着回滚，但每小时清理任务只保留每篇文档最新 3 个 superseded 旧版（`ChatMemoryCleanup` 调 `purgeOldSuperseded(3)`），再早的彻底删除；当前版（pending/approved/rejected）永远不动。版本号每次同名替换 +1（首版 v1），存在块元数据 `version` 里。回滚（`POST /api/document/rollback`）：目标版恢复成 `prev_status`（没批过的旧版回滚后还是待审批，不会悄悄发布），当前版改成 `superseded`；审批（批准/驳回）只动当前版的块，不碰已 superseded 的旧版。
+- 流式问答的引用清洗：`StreamingCitationFilter` 边收 token 边删超范围的 `[n]`（与整段版 `sanitizeCitations` 同规则），引用编号拆成几个 token 发来也一样处理；存进记忆的是同一份过滤后的文本。文本依据校验（`CitationValidator`）仍只对完整答案做。
+- 通知：上传待审批时给管理员发提醒（部门文档再发给该部门的部门管理员），批准/驳回后给上传人发结果（上传人从最近一次入库任务里找，7 天前的任务已被清理时不发）；通知失败不影响上传/审批本身（内部 catch 记 WARN）。对外 API Key：`kb_` + 32 位随机串，库里只存 SHA-256 哈希，明文只在创建时返回一次；请求头 `X-API-Key` 鉴权，权限就是 Key 创建者的角色，`/api/admin/**` 与 `/api/auth/**` 不认 Key；范围 `ask` 只能调问答与清单接口，`expires_at` 到了时间直接拒绝。
+- 文档解析：`.txt/.md` 直接读 UTF-8（保留 Markdown 结构），`.pdf/.doc/.docx/.xls/.xlsx/.ppt/.pptx` 走 Tika；扫描版 PDF 靠 Tika 的 Tesseract 解析器做 OCR，机器上装了 `tesseract` 才生效，没装时解析出空文本、上传报 400（见部署文档）。
 - 入库带审批状态（块元数据 `status`）：管理员上传直接发布，部门管理员传本部门的文档直接发布，其余一律 `pending` 待审批；问答只查 `approved` 的块，清单默认只列已发布的（管理员与部门管理员看全部）。
 - 扫描版 PDF（纯图片无文字层）解析不出文本，返回 400，不静默存 0 块。
 

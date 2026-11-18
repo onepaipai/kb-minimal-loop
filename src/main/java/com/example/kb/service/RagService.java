@@ -131,7 +131,8 @@ public class RagService {
     /**
      * 流式检索问答：先发一次引用来源，再逐 token 发答案，最后发完成；出错走 onError。
      * 多轮记忆只在完整答案拿到后存一次，绝不在每个 token 到达时存。
-     * 无命中时直接发固定回答，不调模型；流式 token 是边收边发的，引用清洗只对存进记忆的完整答案做。
+     * 无命中时直接发固定回答，不调模型；流式 token 边收边过引用过滤器，超范围的 [n] 发出去之前就删掉，
+     * 存进记忆的是同一份过滤后的文本（文本依据校验仍只对完整答案做，见 onCompleteResponse）。
      */
     public void askStream(AskRequest request, AskScope scope, StreamListener listener) {
         PreparedAsk prepared = prepare(request, scope);
@@ -142,19 +143,31 @@ public class RagService {
             listener.onComplete();
             return;
         }
+        StreamingCitationFilter citationFilter = new StreamingCitationFilter(prepared.hits().size());
         StringBuilder answerBuilder = new StringBuilder();
         streamingChatModel.chat(prepared.messages(), new StreamingChatResponseHandler() {
             @Override
             public void onPartialResponse(String partialResponse) {
-                answerBuilder.append(partialResponse);
-                listener.onToken(partialResponse);
+                String safe = citationFilter.feed(partialResponse);
+                answerBuilder.append(safe);
+                if (!safe.isEmpty()) {
+                    listener.onToken(safe);
+                }
             }
 
             @Override
             public void onCompleteResponse(ChatResponse completeResponse) {
-                String answer = completeResponse.aiMessage().text();
-                if (answer == null) {
-                    answer = answerBuilder.toString();
+                String tail = citationFilter.flush();
+                answerBuilder.append(tail);
+                if (!tail.isEmpty()) {
+                    listener.onToken(tail);
+                }
+                String answer = answerBuilder.toString();
+                if (answer.isBlank() && completeResponse.aiMessage() != null
+                        && completeResponse.aiMessage().text() != null) {
+                    // 有的模型不发 partial，直接拿整段答案过一遍过滤器
+                    answer = citationFilter.feed(completeResponse.aiMessage().text())
+                            + citationFilter.flush();
                 }
                 saveMemory(prepared, request.getQuestion(), CitationValidator.validate(
                         sanitizeCitations(answer, prepared.hits().size()), chunkTexts(prepared.hits())));

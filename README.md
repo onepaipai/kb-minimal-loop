@@ -27,7 +27,7 @@ curl -X POST http://localhost:8080/api/ask -H "Authorization: Bearer $TOKEN" -H 
 - [架构](docs/architecture.md)——模块划分、数据流、关键决策与已知缺口
 - [接口](docs/api.md)——全部接口、SSE 事件、统一错误体
 - [部署](docs/deployment.md)——Neon、环境变量、启动
-- [验收](docs/acceptance.md)——46 条验收清单
+- [验收](docs/acceptance.md)——51 条验收清单
 
 `docs/*.txt` 为示例文档（请假 / 报销 / 考勤制度），可直接上传验证。前端企业级单页在 `src/main/resources/static/`（`index.html`、`styles.css`、`app.js`，无构建步骤，样式为 Tabler v1.7.5 的 `tabler.min.css`，启动后打开 `http://localhost:8080/`）。
 

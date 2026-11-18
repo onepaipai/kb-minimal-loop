@@ -392,14 +392,25 @@
             <h2 class="card-title">API 密钥（仅管理员）</h2>
           </div>
           <div class="card-body">
-            <p class="text-secondary">给别的系统调问答、入库接口用，请求头带 <code>X-API-Key</code>；权限就是创建者的角色，管理接口不认 Key。</p>
+            <p class="text-secondary">给别的系统调问答、入库接口用，请求头带 <code>X-API-Key</code>；权限就是创建者的角色，管理接口不认 Key。范围选“仅问答”时只能调问答与清单接口；有效期不填表示永不过期。</p>
             <form id="createApiKeyForm">
               <div class="row g-2 align-items-end">
-                <div class="col-md-6">
+                <div class="col-md-4">
                   <label class="form-label" for="apiKeyName">名字</label>
                   <input id="apiKeyName" class="form-control" type="text" required maxlength="64" placeholder="如：oa-同步">
                 </div>
                 <div class="col-md-3">
+                  <label class="form-label" for="apiKeyScope">范围</label>
+                  <select id="apiKeyScope" class="form-select">
+                    <option value="all">全部（除管理接口）</option>
+                    <option value="ask">仅问答</option>
+                  </select>
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label" for="apiKeyExpires">有效期（天，空=永久）</label>
+                  <input id="apiKeyExpires" class="form-control" type="number" min="1" max="3650" placeholder="如：90">
+                </div>
+                <div class="col-md-2">
                   <button type="submit" class="btn btn-primary w-100">创建密钥</button>
                 </div>
               </div>
@@ -413,7 +424,7 @@
             </div>
             <div class="table-responsive mt-3">
               <table id="apiKeysTable" class="table table-vcenter">
-                <thead><tr><th>名字</th><th>创建者</th><th>创建于</th><th>最后使用</th><th>状态</th><th></th></tr></thead>
+                <thead><tr><th>名字</th><th>创建者</th><th>范围</th><th>有效期至</th><th>创建于</th><th>最后使用</th><th>状态</th><th></th></tr></thead>
                 <tbody></tbody>
               </table>
             </div>

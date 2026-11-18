@@ -35,7 +35,7 @@ curl -X POST http://localhost:8080/api/auth/logout -H "Content-Type: application
 - 登录加固：连续 5 次密码错误锁定账号 15 分钟；开了双因素的账号登录时多传 `totpCode`（6 位动态验证码，见 [双因素](#双因素认证totp)）；密码策略：至少 10 位且同时含字母和数字。
 - 限流走数据库（多实例共用）：已登录用户每分钟 120 次，未登录按 IP 每分钟 30 次，超了返回 429。
 - 企业登录（OIDC）：见 [部署](deployment.md) 配好 IdP 后，登录页出现“企业账号登录”按钮；点它跳去 IdP 登录，回来自动进应用。首次登录自动建一个 USER 账号，管理员用 `PUT /api/admin/users/{username}` 调它的角色和部门。相关接口：`GET /api/auth/oidc/enabled`（查是否开启）、`POST /api/auth/oidc/exchange`（凭回调的一次性码换 Token，5 分钟有效、用过即废）。
-- 对外 API Key：给别的系统调数据接口用，不用账号密码登录。请求头带 `X-API-Key: kb_...` 即可（不用再带 Bearer Token），权限就是 Key 创建者的角色；`/api/admin/**` 与 `/api/auth/**` 不认 Key，只能用 JWT。Key 在管理员的“API 密钥”页面创建，明文只显示一次。
+- 对外 API Key：给别的系统调数据接口用，不用账号密码登录。请求头带 `X-API-Key: kb_...` 即可（不用再带 Bearer Token），权限就是 Key 创建者的角色；`/api/admin/**` 与 `/api/auth/**` 不认 Key，只能用 JWT。Key 在管理员的“API 密钥”页面创建，明文只显示一次。建 Key 时可限范围：`ask` 只能调问答与清单接口（`/api/ask`、`/api/ask-stream`、`GET /api/documents`、`GET /api/document/versions`），`all`（默认）除管理接口外都能调；可填有效期天数（1–3650，不填永不过期），过期后调任何接口都返回 401。
 
 ## POST /api/ingest —— 上传文档入库
 
@@ -274,11 +274,11 @@ curl "http://localhost:8080/api/notifications?page=0&size=20" -H "Authorization:
 ## API 密钥管理（仅 ADMIN）
 
 ```bash
-# 创建：名字 1-64 字；返回的 key 明文只出现这一次，关闭后查不到
-curl -X POST http://localhost:8080/api/admin/api-keys -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"name":"oa-同步"}'
+# 创建：名字 1-64 字；scope 不传默认 all；expiresInDays 不传表示永不过期；返回的 key 明文只出现这一次，关闭后查不到
+curl -X POST http://localhost:8080/api/admin/api-keys -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" -d '{"name":"oa-同步","scope":"ask","expiresInDays":90}'
 # 返回 {"id":"...","key":"kb_..."}
 
-# 列表（不含明文）：名字、创建者、创建于、最后使用、状态
+# 列表（不含明文）：名字、创建者、范围、有效期至、创建于、最后使用、状态
 curl http://localhost:8080/api/admin/api-keys -H "Authorization: Bearer $TOKEN"
 
 # 吊销：不存在或已吊销返回 404
@@ -286,7 +286,7 @@ curl -X DELETE http://localhost:8080/api/admin/api-keys/<id> -H "Authorization: 
 # 返回 {"id":"...","revoked":true}
 ```
 
-Key 归创建者所有，权限就是创建者的角色；库里只存 SHA-256 哈希。调数据接口时请求头带 `X-API-Key: kb_...`（见[鉴权](#鉴权除登录外所有接口都要带-token)），`/api/admin/**` 与 `/api/auth/**` 不认 Key。
+Key 归创建者所有，权限就是创建者的角色；库里只存 SHA-256 哈希。调数据接口时请求头带 `X-API-Key: kb_...`（见[鉴权](#鉴权除登录外所有接口都要带-token)），`/api/admin/**` 与 `/api/auth/**` 不认 Key。范围 `ask` 的 Key 只能调问答与清单接口，调入库、删除、审批等返回 401；过了有效期的 Key 调任何接口都返回 401。
 
 ## 健康检查
 

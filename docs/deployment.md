@@ -5,6 +5,7 @@
 - JDK 17、Maven 3.9+（本机 Maven 默认 Java 11 时，启动前需 `export JAVA_HOME` 指向 JDK 17）
 - Neon 建好项目和数据库，连接串使用**直连端点**（不要 `-pooler` 端点）
 - DeepSeek 平台 API Key、阿里云 DashScope API Key
+- 扫描版 PDF 要 OCR 时才需要：服务器装 Tesseract（Linux：`sudo apt install tesseract-ocr`，中文再加 `tesseract-ocr-chi-sim`；Windows：去 tesseract 官网下安装包，装完把安装目录加进 PATH）。没装也不影响启动，只是扫描版 PDF 上传会报 400；普通 PDF、Word、Excel、PPT 不需要它。
 
 ## 环境变量（15 个，模型与数据库的 5 个必填，其余可选）
 

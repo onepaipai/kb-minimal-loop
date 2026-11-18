@@ -719,12 +719,17 @@ async function loadApiKeys() {
             name.textContent = k.name;
             const owner = document.createElement('td');
             owner.textContent = k.username;
+            const scope = document.createElement('td');
+            scope.textContent = k.scope === 'ask' ? '仅问答' : '全部';
+            const expires = document.createElement('td');
+            expires.textContent = k.expiresAt ? k.expiresAt.slice(0, 19).replace('T', ' ') : '永久';
             const created = document.createElement('td');
             created.textContent = k.createdAt ? k.createdAt.slice(0, 19).replace('T', ' ') : '—';
             const lastUsed = document.createElement('td');
             lastUsed.textContent = k.lastUsedAt ? k.lastUsedAt.slice(0, 19).replace('T', ' ') : '从未使用';
             const status = document.createElement('td');
-            status.textContent = k.revoked ? '已吊销' : '有效';
+            status.textContent = k.revoked ? '已吊销'
+                : (k.expiresAt && new Date(k.expiresAt) <= new Date() ? '已过期' : '有效');
             const action = document.createElement('td');
             if (!k.revoked) {
                 const revoke = document.createElement('button');
@@ -734,7 +739,7 @@ async function loadApiKeys() {
                 revoke.addEventListener('click', () => revokeApiKey(k.id, k.name));
                 action.appendChild(revoke);
             }
-            row.append(name, owner, created, lastUsed, status, action);
+            row.append(name, owner, scope, expires, created, lastUsed, status, action);
             tbody.appendChild(row);
         });
     } catch (e) {
@@ -1156,9 +1161,14 @@ async function handleOidcCallback() {
 $('createApiKeyForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
+        const expiresDays = $('apiKeyExpires').value.trim();
         const created = await api('/api/admin/api-keys', {
             method: 'POST',
-            body: { name: $('apiKeyName').value.trim() },
+            body: {
+                name: $('apiKeyName').value.trim(),
+                scope: $('apiKeyScope').value,
+                expiresInDays: expiresDays === '' ? null : Number(expiresDays),
+            },
         });
         $('newApiKey').textContent = created.key;
         $('newApiKeyBox').hidden = false;

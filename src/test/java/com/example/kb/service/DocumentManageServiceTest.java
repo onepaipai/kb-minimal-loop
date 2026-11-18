@@ -82,4 +82,28 @@ class DocumentManageServiceTest {
                 .thenReturn(3, 0);
         assertThrows(ResponseStatusException.class, () -> service().rollback("a.txt", 2));
     }
+
+    @Test
+    void publishVersionSetsTargetStatusThenSupersedesOld() {
+        service().publishVersion("a.txt", "batch-1", "approved");
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        ArgumentCaptor<Object[]> args = ArgumentCaptor.forClass(Object[].class);
+        verify(jdbcTemplate, times(2)).update(sql.capture(), args.capture());
+        List<String> sqls = sql.getAllValues();
+        // 第一条：新批次改成目标状态；第二条：其余旧版标 superseded
+        assertTrue(sqls.get(0).contains("COALESCE(metadata->>'batch', '') = ?"));
+        assertEquals("approved", args.getAllValues().get(0)[0]);
+        assertTrue(sqls.get(1).contains("superseded"));
+        assertTrue(sqls.get(1).contains("prev_status"));
+    }
+
+    @Test
+    void purgeOldSupersededKeepsLatestVersions() {
+        service().purgeOldSuperseded(3);
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate).update(sql.capture(), eq(3));
+        assertTrue(sql.getValue().contains("DELETE FROM"));
+        assertTrue(sql.getValue().contains("'superseded'"));
+        assertTrue(sql.getValue().contains("max(CAST(NULLIF(metadata->>'version', '') AS INTEGER))"));
+    }
 }

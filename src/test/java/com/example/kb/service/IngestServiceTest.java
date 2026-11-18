@@ -22,6 +22,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
@@ -83,5 +84,76 @@ class IngestServiceTest {
         verify(embeddingStore).addAll(anyList(), captor.capture());
         assertEquals(IngestService.sha256Hex(bytes),
                 captor.getValue().get(0).metadata().getString(MetadataKeys.FILE_HASH));
+        // 新版先以 pending 入库，发布那一步再改成目标状态：入库中途断了旧版还活着
+        assertEquals("pending", captor.getValue().get(0).metadata().getString(MetadataKeys.STATUS));
+        verify(documentManageService).publishVersion(eq("a.txt"), anyString(), eq("approved"));
+    }
+
+    @Test
+    void xlsxParsesThroughTika() throws Exception {
+        org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+        org.apache.poi.ss.usermodel.Sheet sheet = workbook.createSheet("制度");
+        sheet.createRow(0).createCell(0).setCellValue("请假制度：年假十五天");
+        byte[] bytes = toBytes(workbook);
+        workbook.close();
+        when(documentManageService.findFileHash("假期.xlsx")).thenReturn(null);
+        when(documentManageService.nextVersion("假期.xlsx")).thenReturn(1);
+        when(documentManageService.countBySource("假期.xlsx")).thenReturn(1);
+        when(documentSplitter.splitAll(anyList())).thenAnswer(inv -> {
+            List<Document> documents = inv.getArgument(0);
+            return documents.stream()
+                    .map(document -> TextSegment.from(document.text(), document.metadata()))
+                    .toList();
+        });
+        when(embeddingModel.embedAll(anyList()))
+                .thenReturn(Response.from(List.of(new Embedding(new float[] {0f}))));
+        IngestService service = new IngestService(documentSplitter, embeddingModel, embeddingStore,
+                documentManageService);
+
+        var response = service.ingestBytes(bytes, "假期.xlsx", "all", "approved");
+
+        assertFalse(response.isSkipped());
+        ArgumentCaptor<List<TextSegment>> captor = ArgumentCaptor.forClass(List.class);
+        verify(embeddingStore).addAll(anyList(), captor.capture());
+        assertTrue(captor.getValue().get(0).text().contains("请假制度"));
+    }
+
+    @Test
+    void pptxParsesThroughTika() throws Exception {
+        org.apache.poi.xslf.usermodel.XMLSlideShow slideshow = new org.apache.poi.xslf.usermodel.XMLSlideShow();
+        org.apache.poi.xslf.usermodel.XSLFSlide slide = slideshow.createSlide();
+        slide.createTextBox().setText("请假制度：年假十五天");
+        byte[] bytes = toBytes(slideshow);
+        slideshow.close();
+        when(documentManageService.findFileHash("假期.pptx")).thenReturn(null);
+        when(documentManageService.nextVersion("假期.pptx")).thenReturn(1);
+        when(documentManageService.countBySource("假期.pptx")).thenReturn(1);
+        when(documentSplitter.splitAll(anyList())).thenAnswer(inv -> {
+            List<Document> documents = inv.getArgument(0);
+            return documents.stream()
+                    .map(document -> TextSegment.from(document.text(), document.metadata()))
+                    .toList();
+        });
+        when(embeddingModel.embedAll(anyList()))
+                .thenReturn(Response.from(List.of(new Embedding(new float[] {0f}))));
+        IngestService service = new IngestService(documentSplitter, embeddingModel, embeddingStore,
+                documentManageService);
+
+        var response = service.ingestBytes(bytes, "假期.pptx", "all", "approved");
+
+        assertFalse(response.isSkipped());
+        ArgumentCaptor<List<TextSegment>> captor = ArgumentCaptor.forClass(List.class);
+        verify(embeddingStore).addAll(anyList(), captor.capture());
+        assertTrue(captor.getValue().get(0).text().contains("请假制度"));
+    }
+
+    private static byte[] toBytes(java.io.Closeable workbook) throws Exception {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        if (workbook instanceof org.apache.poi.xssf.usermodel.XSSFWorkbook wb) {
+            wb.write(out);
+        } else if (workbook instanceof org.apache.poi.xslf.usermodel.XMLSlideShow ppt) {
+            ppt.write(out);
+        }
+        return out.toByteArray();
     }
 }

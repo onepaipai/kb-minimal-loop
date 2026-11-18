@@ -37,16 +37,32 @@ public class ApiKeyController {
         this.auditService = auditService;
     }
 
-    /** 建 Key：名字 1-64 字；返回的 key 明文只出现这一次，前端展示后即丢。 */
+    /** 建 Key：名字 1-64 字；scope 不传默认 all；expiresInDays 不传表示永不过期；返回的 key 明文只出现这一次，前端展示后即丢。 */
     @PostMapping
     public Map<String, Object> create(@RequestBody ApiKeyCreateRequest request) {
         String name = request == null || request.name() == null ? "" : request.name().trim();
         if (name.isEmpty() || name.length() > 64) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "名字 1-64 字");
         }
+        String scope = request.scope() == null || request.scope().isBlank() ? ApiKeyService.SCOPE_ALL
+                : request.scope().trim().toLowerCase();
+        if (!ApiKeyService.SCOPE_ALL.equals(scope) && !ApiKeyService.SCOPE_ASK.equals(scope)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "scope 只能是 all 或 ask");
+        }
+        if (request.expiresInDays() != null
+                && (request.expiresInDays() < 1 || request.expiresInDays() > ApiKeyService.MAX_EXPIRES_DAYS)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "有效期 1-" + ApiKeyService.MAX_EXPIRES_DAYS + " 天");
+        }
         UserPrincipal user = DepartmentScope.requireCurrentUser();
-        ApiKeyService.CreatedKey created = apiKeyService.create(name, user.username());
-        auditService.record(user.username(), "CREATE_API_KEY", created.id().toString(), "name=" + name);
+        ApiKeyService.CreatedKey created;
+        try {
+            created = apiKeyService.create(name, user.username(), scope, request.expiresInDays());
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, e.getMessage());
+        }
+        auditService.record(user.username(), "CREATE_API_KEY", created.id().toString(),
+                "name=" + name + " scope=" + scope);
         return Map.of("id", created.id().toString(), "key", created.rawKey());
     }
 
