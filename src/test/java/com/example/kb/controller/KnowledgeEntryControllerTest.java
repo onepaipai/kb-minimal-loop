@@ -1,5 +1,6 @@
 package com.example.kb.controller;
 
+import com.example.kb.dto.KnowledgeBatchDeleteRequest;
 import com.example.kb.dto.KnowledgeEntryCreateRequest;
 import com.example.kb.security.UserPrincipal;
 import com.example.kb.service.KnowledgeEntryService;
@@ -101,6 +102,28 @@ class KnowledgeEntryControllerTest {
         controller.list(null, null);
 
         verify(knowledgeEntryService).list(anyString(), isNull(), anyBoolean(), eq("editor"));
+    }
+
+    @Test
+    void batchDeleteReturnsDeletedIds() {
+        java.util.UUID id = java.util.UUID.randomUUID();
+        when(knowledgeEntryService.batchDelete(any(), any())).thenReturn(List.of(id));
+        KnowledgeBatchDeleteRequest request = new KnowledgeBatchDeleteRequest();
+        request.setIds(List.of(id));
+
+        java.util.Map<String, Object> result = controller.batchDelete(request);
+
+        assertEquals(1, result.get("requested"));
+        assertEquals(List.of(String.valueOf(id)), result.get("deleted"));
+    }
+
+    @Test
+    void batchDeleteRejectsEmptyIds() {
+        KnowledgeBatchDeleteRequest request = new KnowledgeBatchDeleteRequest();
+        request.setIds(List.of());
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> controller.batchDelete(request));
+        assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
     }
 
     @Test

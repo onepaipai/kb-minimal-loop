@@ -10,6 +10,7 @@ public class DocumentSummary {
     private String visibility;
     private String status;
     private int version;
+    private boolean hasBlob;
 
     public String getSource() {
         return source;
@@ -49,5 +50,13 @@ public class DocumentSummary {
 
     public void setVersion(int version) {
         this.version = version;
+    }
+
+    public boolean isHasBlob() {
+        return hasBlob;
+    }
+
+    public void setHasBlob(boolean hasBlob) {
+        this.hasBlob = hasBlob;
     }
 }

@@ -27,9 +27,9 @@ curl -X POST http://localhost:8080/api/ask -H "Authorization: Bearer $TOKEN" -H 
 - [架构](docs/architecture.md)——模块划分、数据流、关键决策与已知缺口
 - [接口](docs/api.md)——全部接口、SSE 事件、统一错误体
 - [部署](docs/deployment.md)——Neon、环境变量、启动
-- [验收](docs/acceptance.md)——55 条验收清单
+- [验收](docs/acceptance.md)——63 条验收清单
 
-`docs/samples/` 下为示例文档（请假 / 报销 / 考勤制度），可直接上传验证。前端企业级单页在 `src/main/resources/static/`（`index.html`、`styles.css`、`app.js`，无构建步骤，样式为 Tabler v1.7.5 的 `tabler.min.css`，启动后打开 `http://localhost:8080/`）。
+`docs/samples/` 下为示例文档（请假 / 报销 / 考勤制度），可直接上传验证。前端企业级单页在 `src/main/resources/static/`（`index.html`、`styles.css`、`app.js` 主体 + `features.js` 新功能模块，无构建步骤，样式为 Tabler v1.7.5 的 `tabler.min.css`，启动后打开 `http://localhost:8080/`）。
 
 ## 代码结构
 
@@ -54,7 +54,9 @@ src/main/java/com/example/kb/
 │   ├── ApiKeyController.java          # 对外 API Key 创建、列表、吊销（仅管理员）
 │   ├── DepartmentController.java      # 部门管理（仅管理员）
 │   ├── NotificationController.java    # 站内通知：清单、未读数、标已读
-│   ├── SessionController.java         # 会话历史：清单、消息回放、删除
+│   ├── SessionController.java         # 会话历史：清单、消息回放、删除、批量删除
+│   ├── SearchController.java          # POST /api/search：仅检索，不生成答案
+│   ├── StatsController.java           # GET /api/admin/stats/trend：按天趋势（仅 ADMIN）
 │   └── FeedbackController.java        # POST /api/feedback
 ├── security/                          # 鉴权与权限
 │   ├── SecurityConfig.java            # JWT 过滤链（登录与健康检查放行，其余 /api/** 要带 Token）
@@ -107,11 +109,13 @@ src/main/java/com/example/kb/
 │   ├── ChatSessionService.java        # 会话历史落库（跨设备同步，长期保留）
 │   ├── JdbcChatMemoryStore.java       # 会话记忆落库（chat_memory 表，喂模型用的短期记忆）
 │   ├── ChatMemoryCleanup.java         # 过期会话与限流窗口定时清理
+│   ├── DocumentBlobService.java       # 原件字节存取（下载用，与文档版本同生命周期）
+│   ├── StatsService.java              # 按天聚合反馈、盲区、入库趋势
 │   └── MetadataKeys.java              # 块元数据键集中定义
 ├── common/                            # 跨层共用
 │   ├── Visibility.java                # 可见性 / 部门代号：all 或小写代号，入口统一校验
 │   └── exception/                     # 统一异常处理与错误体
 │       ├── GlobalExceptionHandler.java
 │       └── ErrorResponse.java
-└── dto/                               # 接口出入参，按交易隔离平铺（30 个类）
+└── dto/                               # 接口出入参，按交易隔离平铺（含 4 个批量删除入参）
 ```

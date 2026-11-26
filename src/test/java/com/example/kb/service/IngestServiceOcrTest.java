@@ -50,6 +50,8 @@ class IngestServiceOcrTest {
     private EmbeddingStore<TextSegment> embeddingStore;
     @Mock
     private DocumentManageService documentManageService;
+    @Mock
+    private DocumentBlobService documentBlobService;
 
     @Test
     void scannedPdfOcrReadsImageText() throws Exception {
@@ -69,7 +71,7 @@ class IngestServiceOcrTest {
         when(embeddingModel.embedAll(anyList()))
                 .thenReturn(Response.from(List.of(new Embedding(new float[] {0f}))));
         IngestService service = new IngestService(documentSplitter, embeddingModel, embeddingStore,
-                documentManageService);
+                documentManageService, documentBlobService);
 
         var response = service.ingestBytes(bytes, "scanned.pdf", "all", "approved");
 

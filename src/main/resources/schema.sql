@@ -43,6 +43,12 @@ ALTER TABLE api_key ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'all';
 ALTER TABLE api_key ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NULL;
 CREATE INDEX IF NOT EXISTS api_key_username_idx ON api_key (username);
 
+-- 原始文件字节：上传时与切块一起存，供下载原格式；与文档版本同生命周期（删除/旧版清理时同步删）
+CREATE TABLE IF NOT EXISTS document_blob (source TEXT NOT NULL, version INTEGER NOT NULL, filename TEXT NOT NULL,
+    content_type TEXT NULL, file_size INTEGER NOT NULL, bytes BYTEA NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (source, version));
+CREATE INDEX IF NOT EXISTS document_blob_source_idx ON document_blob (source);
+
 -- 知识盲区：问答没答上（检索无命中或模型明确答“资料里没找到”）时落一条，盲区看板按问题原文聚合
 CREATE TABLE IF NOT EXISTS question_miss (id UUID PRIMARY KEY, username TEXT NOT NULL, department TEXT NULL, question TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS question_miss_question_idx ON question_miss (question);

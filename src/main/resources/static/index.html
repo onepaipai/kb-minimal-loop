@@ -55,6 +55,7 @@
       </span>
     </div>
     <button id="newSessionBtn" type="button" class="btn btn-primary w-100">+ 新对话</button>
+    <button id="batchDeleteSessionsBtn" type="button" class="btn btn-outline-danger btn-sm w-100 mt-1">批量删除会话</button>
     <div class="sidebar-section-label">最近对话</div>
     <nav id="sessionList" class="session-list"></nav>
     <div class="sidebar-nav">
@@ -126,6 +127,16 @@
           </div>
         </div>
       </div>
+      <div class="card" id="trendCard" hidden>
+        <div class="card-header d-flex align-items-center justify-content-between">
+          <h2 class="card-title">近 7 天趋势</h2>
+          <span id="trendLegend" class="text-secondary small"></span>
+        </div>
+        <div class="card-body">
+          <svg id="trendChart" viewBox="0 0 700 180" width="100%" height="180" role="img" aria-label="最近趋势"></svg>
+          <div id="trendEmpty" class="text-secondary small">暂无数据</div>
+        </div>
+      </div>
       <div class="card">
         <div class="card-header">
           <h2 class="card-title">快捷操作</h2>
@@ -185,6 +196,7 @@
         <form id="askForm" class="composer-form">
           <textarea id="question" class="form-control" rows="2" required placeholder="输入问题，Enter 发送，Shift+Enter 换行"></textarea>
           <button type="submit" class="btn btn-primary">发送</button>
+          <button id="searchOnlyBtn" type="button" class="btn btn-outline-secondary">仅搜索</button>
         </form>
       </div>
     </section>
@@ -223,13 +235,14 @@
           <div class="card-body">
             <div class="d-flex align-items-center gap-2 mb-3">
               <button id="refreshDocsBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+              <button id="batchDeleteDocsBtn" type="button" class="btn btn-outline-danger btn-sm">批量删除</button>
               <button id="prevPageBtn" type="button" class="btn btn-outline-secondary btn-sm">上一页</button>
               <button id="nextPageBtn" type="button" class="btn btn-outline-secondary btn-sm">下一页</button>
               <span id="pageInfo" class="text-secondary"></span>
             </div>
             <div class="table-responsive">
               <table id="docsTable" class="table table-vcenter">
-                <thead><tr><th>文件</th><th>块数</th><th>可见性</th><th>状态</th><th>版本</th><th></th></tr></thead>
+                <thead><tr><th></th><th>文件</th><th>块数</th><th>可见性</th><th>状态</th><th>版本</th><th>操作</th></tr></thead>
                 <tbody></tbody>
               </table>
             </div>
@@ -482,11 +495,12 @@
           <div class="card-body">
             <div class="d-flex align-items-center gap-2 mb-3">
               <button id="refreshEntriesBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+              <button id="batchDeleteEntriesBtn" type="button" class="btn btn-outline-danger btn-sm">批量删除</button>
               <span id="entriesInfo" class="text-secondary"></span>
             </div>
             <div class="table-responsive">
               <table id="entriesTable" class="table table-vcenter">
-                <thead><tr><th>标题</th><th>分类</th><th>标签</th><th>可见性</th><th>状态</th><th>更新时间</th><th></th></tr></thead>
+                <thead><tr><th></th><th>标题</th><th>分类</th><th>标签</th><th>可见性</th><th>状态</th><th>更新时间</th><th></th></tr></thead>
                 <tbody></tbody>
               </table>
             </div>
@@ -543,11 +557,12 @@
           <div class="card-body">
             <div class="d-flex align-items-center gap-2 mb-3">
               <button id="refreshFaqBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+              <button id="batchDeleteFaqBtn" type="button" class="btn btn-outline-danger btn-sm">批量删除</button>
               <span id="faqInfo" class="text-secondary"></span>
             </div>
             <div class="table-responsive">
               <table id="faqTable" class="table table-vcenter">
-                <thead><tr><th>问题</th><th>关键词</th><th>部门</th><th>状态</th><th>更新时间</th><th></th></tr></thead>
+                <thead><tr><th></th><th>问题</th><th>关键词</th><th>部门</th><th>状态</th><th>更新时间</th><th></th></tr></thead>
                 <tbody></tbody>
               </table>
             </div>
@@ -644,6 +659,7 @@
     </section>
   </main>
 </div>
+<script src="features.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

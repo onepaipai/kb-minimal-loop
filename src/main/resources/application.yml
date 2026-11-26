@@ -27,6 +27,11 @@ langchain4j:
     model-name: text-embedding-v4
 
 app:
+  blob:
+    # 上传原件是否存库供下载；关掉后上传仍正常，只是不能下载原格式（文本预览仍可用）
+    enabled: ${BLOB_ENABLED:true}
+    # 单个原件体积上限（MB），超限跳过保存，避免大文件撑大数据库；Spring 上传总上限见 spring.servlet.multipart
+    max-size-mb: ${BLOB_MAX_SIZE_MB:10}
   rerank:
     # 神经重排：问答检索后用 qwen3-rerank 对候选块再排一遍；失败时回退 RRF 顺序，Key 复用 DASHSCOPE_API_KEY
     enabled: ${RERANK_ENABLED:true}

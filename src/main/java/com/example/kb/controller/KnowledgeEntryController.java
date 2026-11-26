@@ -1,10 +1,12 @@
 package com.example.kb.controller;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
 import com.example.kb.common.Visibility;
+import com.example.kb.dto.KnowledgeBatchDeleteRequest;
 import com.example.kb.dto.KnowledgeEntryCreateRequest;
 import com.example.kb.dto.KnowledgeEntryUpdateRequest;
 import com.example.kb.security.DepartmentScope;
@@ -97,5 +99,37 @@ public class KnowledgeEntryController {
         UserPrincipal user = DepartmentScope.requireCurrentUser();
         knowledgeEntryService.delete(id, user);
         return java.util.Map.of("deleted", true);
+    }
+
+    /** 批量删条目：先统一校验全部权限，任一越权整体 403；逐条删返回成功清单（非原子）。 */
+    @PostMapping("/batch-delete")
+    public java.util.Map<String, Object> batchDelete(@RequestBody KnowledgeBatchDeleteRequest request) {
+        UserPrincipal user = DepartmentScope.requireCurrentUser();
+        List<UUID> ids = requireIds(request);
+        List<String> deleted = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+        try {
+            List<UUID> ok = knowledgeEntryService.batchDelete(ids, user);
+            for (UUID id : ok) {
+                deleted.add(String.valueOf(id));
+            }
+        } catch (Exception e) {
+            for (UUID id : ids) {
+                failed.add(String.valueOf(id) + ": " + e.getMessage());
+            }
+        }
+        return java.util.Map.of("requested", ids.size(), "deleted", deleted, "failed", failed);
+    }
+
+    /** 批量入参校验：1-50 个不重复的 id。 */
+    private List<UUID> requireIds(KnowledgeBatchDeleteRequest request) {
+        if (request == null || request.getIds() == null || request.getIds().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ids 不能为空");
+        }
+        List<UUID> ids = request.getIds().stream().filter(java.util.Objects::nonNull).distinct().toList();
+        if (ids.isEmpty() || ids.size() > 50) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ids 需为 1-50 个有效 id");
+        }
+        return ids;
     }
 }

@@ -56,8 +56,8 @@ final class KnowledgeEntryPayloadHelper {
                                                             String visibility, String status, String category,
                                                             String tags) {
         try {
-            // .md 后缀走 UTF-8 直读，不走 Tika，这里的 IOException 只是签名声明，兜底按 500 处理
-            ingestService.ingestBytes(content.getBytes(StandardCharsets.UTF_8), source, visibility, status);
+            // 在线条目没有上传文件，不存原件；.md 后缀走 UTF-8 直读，不走 Tika
+            ingestService.ingestBytes(content.getBytes(StandardCharsets.UTF_8), source, visibility, status, false);
         } catch (IOException e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "知识条目入库失败");
         }

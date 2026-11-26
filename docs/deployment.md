@@ -7,7 +7,7 @@
 - DeepSeek 平台 API Key、阿里云 DashScope API Key
 - 扫描版 PDF 要 OCR 时才需要：服务器装 Tesseract（Linux：`sudo apt install tesseract-ocr`，中文再加 `tesseract-ocr-chi-sim`；Windows：去 tesseract 官网下安装包，装完把安装目录加进 PATH）。没装也不影响启动，只是扫描版 PDF 上传会报 400；普通 PDF、Word、Excel、PPT 不需要它。
 
-## 环境变量（15 个，模型与数据库的 5 个必填，其余可选）
+## 环境变量（17 个，模型与数据库的 5 个必填，其余可选）
 
 | 变量 | 说明 | 示例 |
 | --- | --- | --- |
@@ -26,6 +26,8 @@
 | `RERANK_ENABLED` | 神经重排开关，默认 `true`；关掉则问答只用 RRF 融合顺序，不调重排接口 | `true` |
 | `RERANK_MODEL` | 重排模型，默认 `qwen3-rerank`（`gte-rerank` 已停用） | `qwen3-rerank` |
 | `RERANK_BASE_URL` | 重排接口地址，默认 DashScope 原生接口 | `https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank` |
+| `BLOB_ENABLED` | 上传原件是否存库供下载，默认 `true`；关掉后上传仍正常，只是不能下载原格式（文本预览不受影响） | `false` |
+| `BLOB_MAX_SIZE_MB` | 单个原件体积上限（MB），默认 10；超限跳过保存（不阻断入库），Spring 上传总上限另见 `spring.servlet.multipart` | `20` |
 
 ## 企业登录 OIDC（可选）
 

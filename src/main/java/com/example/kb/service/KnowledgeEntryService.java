@@ -124,6 +124,19 @@ public class KnowledgeEntryService {
         auditService.record(user.username(), "DELETE_ENTRY", row.title(), null);
     }
 
+    /** 批量删条目：先统一校验全部行级权限，任一越权整体 403；再逐条删并返回成功 id（非原子）。 */
+    public List<UUID> batchDelete(List<UUID> ids, UserPrincipal user) {
+        for (UUID id : ids) {
+            DepartmentScope.requireCanDeleteDocument(user, payloadHelper.requireEntry(id).visibility());
+        }
+        List<UUID> deleted = new ArrayList<>();
+        for (UUID id : ids) {
+            delete(id, user);
+            deleted.add(id);
+        }
+        return deleted;
+    }
+
     /** 该来源名是否已被知识条目占用（文件上传撞名校验用）。 */
     public boolean existsBySource(String source) {
         Integer count = jdbcTemplate.queryForObject(

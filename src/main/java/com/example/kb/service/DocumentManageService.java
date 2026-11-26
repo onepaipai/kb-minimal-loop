@@ -27,10 +27,13 @@ public class DocumentManageService {
     private final JdbcTemplate jdbcTemplate;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final DocumentVersionQueryHelper documentVersionQueryHelper;
+    private final DocumentBlobService documentBlobService;
 
-    public DocumentManageService(JdbcTemplate jdbcTemplate, EmbeddingStore<TextSegment> embeddingStore) {
+    public DocumentManageService(JdbcTemplate jdbcTemplate, EmbeddingStore<TextSegment> embeddingStore,
+                                 DocumentBlobService documentBlobService) {
         this.jdbcTemplate = jdbcTemplate;
         this.embeddingStore = embeddingStore;
+        this.documentBlobService = documentBlobService;
         this.documentVersionQueryHelper = new DocumentVersionQueryHelper(jdbcTemplate, embeddingStore);
     }
 
@@ -59,7 +62,8 @@ public class DocumentManageService {
                 Integer.class, params.toArray());
         String sql = "SELECT metadata->>'source' AS source, max(metadata->>'visibility') AS visibility, "
                 + "count(*) AS chunks, max(COALESCE(metadata->>'status','approved')) AS status, "
-                + "COALESCE(max(CAST(NULLIF(metadata->>'version','') AS INTEGER)), 1) AS version FROM " + TABLE
+                + "COALESCE(max(CAST(NULLIF(metadata->>'version','') AS INTEGER)), 1) AS version, "
+                + "EXISTS (SELECT 1 FROM document_blob b WHERE b.source = metadata->>'source') AS has_blob FROM " + TABLE
                 + " WHERE " + where
                 + " GROUP BY metadata->>'source' ORDER BY source LIMIT ? OFFSET ?";
         params.add(size);
@@ -71,6 +75,7 @@ public class DocumentManageService {
             summary.setChunks(rs.getInt("chunks"));
             summary.setStatus(rs.getString("status"));
             summary.setVersion(rs.getInt("version"));
+            summary.setHasBlob(rs.getBoolean("has_blob"));
             return summary;
         }, params.toArray());
         DocumentListResponse response = new DocumentListResponse();
@@ -148,12 +153,26 @@ public class DocumentManageService {
      * 删除指定文档的全部块（含已 superseded 的旧版），deletedChunks 为删除前后统计差值（实际删除量）。
      */
     public DeleteDocumentResponse deleteDocument(String source) {
-        return documentVersionQueryHelper.deleteDocument(source);
+        DeleteDocumentResponse response = documentVersionQueryHelper.deleteDocument(source);
+        if (response.isDeleted()) {
+            documentBlobService.deleteBySource(source);
+        }
+        return response;
+    }
+
+    /** 在线文本预览：按块号顺序拼回当前版全文（切块带了章节前缀，非原始排版）。 */
+    public String previewText(String source) {
+        List<String> parts = jdbcTemplate.queryForList(
+                "SELECT COALESCE(text, '') FROM " + TABLE + " WHERE metadata->>'source' = ? "
+                        + "AND COALESCE(metadata->>'status','approved') <> 'superseded' "
+                        + "ORDER BY CAST(NULLIF(metadata->>'chunk_index','') AS INTEGER)", String.class, source);
+        return String.join("\n\n", parts);
     }
 
     /** 删指定 source 的全部块，供删除接口复用。 */
     public void removeBySource(String source) {
         documentVersionQueryHelper.removeBySource(source);
+        documentBlobService.deleteBySource(source);
     }
 
     /**
@@ -200,6 +219,10 @@ public class DocumentManageService {
      * 只删 superseded 的块，当前版（pending/approved/rejected）永远不动；返回删除的块数。
      */
     public int purgeOldSuperseded(int keep) {
-        return documentVersionQueryHelper.purgeOldSuperseded(keep);
+        int deleted = documentVersionQueryHelper.purgeOldSuperseded(keep);
+        if (deleted > 0) {
+            documentBlobService.purgeOld(keep);
+        }
+        return deleted;
     }
 }

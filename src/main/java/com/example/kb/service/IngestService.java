@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Locale;
 import java.util.UUID;
 
 import com.example.kb.dto.IngestResponse;
@@ -18,6 +19,8 @@ import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.EmbeddingStoreIngestor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -30,18 +33,22 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class IngestService {
 
+    private static final Logger log = LoggerFactory.getLogger(IngestService.class);
     private static final String TEXT_SUFFIX = ".txt";
     private static final String MARKDOWN_SUFFIX = ".md";
 
     private final EmbeddingStoreIngestor embeddingStoreIngestor;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final DocumentManageService documentManageService;
+    private final DocumentBlobService documentBlobService;
     private final ApacheTikaDocumentParser tikaDocumentParser = new ApacheTikaDocumentParser();
 
     public IngestService(DocumentSplitter documentSplitter, EmbeddingModel embeddingModel,
-                         EmbeddingStore<TextSegment> embeddingStore, DocumentManageService documentManageService) {
+                         EmbeddingStore<TextSegment> embeddingStore, DocumentManageService documentManageService,
+                         DocumentBlobService documentBlobService) {
         this.embeddingStore = embeddingStore;
         this.documentManageService = documentManageService;
+        this.documentBlobService = documentBlobService;
         this.embeddingStoreIngestor = EmbeddingStoreIngestor.builder()
                 .documentSplitter(documentSplitter)
                 .embeddingModel(embeddingModel)
@@ -60,6 +67,12 @@ public class IngestService {
 
     /** 同 ingest，但入参是已读进内存的字节数组，供异步入库在后台线程调用。 */
     public IngestResponse ingestBytes(byte[] bytes, String fileName, String visibility, String status) throws IOException {
+        return ingestBytes(bytes, fileName, visibility, status, true);
+    }
+
+    /** 在线知识条目没有"上传原件"，传 false 跳过 blob 保存；其余入库规则完全相同。 */
+    public IngestResponse ingestBytes(byte[] bytes, String fileName, String visibility, String status,
+                                      boolean saveBlob) throws IOException {
         String content = new String(bytes, StandardCharsets.UTF_8);
         if (content.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件内容为空");
@@ -94,8 +107,50 @@ public class IngestService {
         // 先入后发布：新块入库成功才一个事务里改成目标状态并把旧版标成 superseded（不删，留着回滚），
         // 入库中途失败（向量接口报错、断库）旧版不动，新版 pending 不可见
         embeddingStoreIngestor.ingest(document);
+        if (saveBlob) {
+            saveBlob(fileHash, fileName, version, bytes);
+        }
         documentManageService.publishVersion(fileName, metadata.getString(MetadataKeys.BATCH), status);
         return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility, status);
+    }
+
+    /** 保存原件供下载；失败只记 WARN 不影响入库主流程（与审计/通知同一策略）。 */
+    private void saveBlob(String fileHash, String fileName, int version, byte[] bytes) {
+        try {
+            documentBlobService.save(fileName, version, fileName, contentTypeOf(fileName), bytes);
+        } catch (Exception e) {
+            log.warn("原件保存失败 source={} version={} hash={}", fileName, version, fileHash, e);
+        }
+    }
+
+    /** 按后缀推断下载时的 Content-Type；识别不了给 application/octet-stream。 */
+    private String contentTypeOf(String fileName) {
+        String lower = fileName.toLowerCase(Locale.ROOT);
+        if (lower.endsWith(".txt") || lower.endsWith(".md") || lower.endsWith(".java")) {
+            return "text/plain; charset=UTF-8";
+        }
+        if (lower.endsWith(".pdf")) {
+            return "application/pdf";
+        }
+        if (lower.endsWith(".doc")) {
+            return "application/msword";
+        }
+        if (lower.endsWith(".docx")) {
+            return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+        }
+        if (lower.endsWith(".xls")) {
+            return "application/vnd.ms-excel";
+        }
+        if (lower.endsWith(".xlsx")) {
+            return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+        }
+        if (lower.endsWith(".ppt")) {
+            return "application/vnd.ms-powerpoint";
+        }
+        if (lower.endsWith(".pptx")) {
+            return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+        }
+        return "application/octet-stream";
     }
 
     /** 整个文件内容的 SHA-256（十六进制小写）：同名同内容再次上传时直接跳过。 */

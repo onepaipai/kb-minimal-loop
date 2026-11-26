@@ -1,5 +1,6 @@
 package com.example.kb.controller;
 
+import com.example.kb.dto.FaqBatchDeleteRequest;
 import com.example.kb.dto.FaqCreateRequest;
 import com.example.kb.dto.FaqUpdateRequest;
 import com.example.kb.security.UserPrincipal;
@@ -106,6 +107,34 @@ class FaqControllerTest {
         request.setAnswer("新答案");
         ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> controller.update(id, request));
         assertEquals(HttpStatus.FORBIDDEN, error.getStatusCode());
+    }
+
+    @Test
+    void batchDeleteDeletesAllAsAdmin() {
+        controller = new FaqController(faqService, auditService);
+        login(new UserPrincipal("admin", "ADMIN", null));
+        UUID id = UUID.randomUUID();
+        when(faqService.get(id)).thenReturn(entry("all"));
+        when(faqService.delete(id)).thenReturn(true);
+        FaqBatchDeleteRequest request = new FaqBatchDeleteRequest();
+        request.setIds(List.of(id, id));
+
+        java.util.Map<String, Object> result = controller.batchDelete(request);
+
+        assertEquals(1, result.get("requested"));
+        assertEquals(List.of(String.valueOf(id)), result.get("deleted"));
+        verify(auditService).record(anyString(), anyString(), anyString(), any());
+    }
+
+    @Test
+    void batchDeleteRejectsEmptyIds() {
+        controller = new FaqController(faqService, auditService);
+        login(new UserPrincipal("admin", "ADMIN", null));
+        FaqBatchDeleteRequest request = new FaqBatchDeleteRequest();
+        request.setIds(List.of());
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> controller.batchDelete(request));
+        assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
     }
 
     @Test

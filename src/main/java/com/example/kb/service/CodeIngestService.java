@@ -20,6 +20,8 @@ import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.output.Response;
 import dev.langchain4j.store.embedding.EmbeddingStore;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
@@ -32,18 +34,22 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class CodeIngestService {
 
+    private static final Logger log = LoggerFactory.getLogger(CodeIngestService.class);
+
     /** 单个方法块超过该字符数时按行拆成多块，避免超大方法一个块占满上下文 */
     private static final int MAX_METHOD_CHARS = 8000;
 
     private final EmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final DocumentManageService documentManageService;
+    private final DocumentBlobService documentBlobService;
 
     public CodeIngestService(EmbeddingModel embeddingModel, EmbeddingStore<TextSegment> embeddingStore,
-                             DocumentManageService documentManageService) {
+                             DocumentManageService documentManageService, DocumentBlobService documentBlobService) {
         this.embeddingModel = embeddingModel;
         this.embeddingStore = embeddingStore;
         this.documentManageService = documentManageService;
+        this.documentBlobService = documentBlobService;
     }
 
     /** 先解析（语法错直接 400），成功后先入新块再发布（一个事务里改状态并 supersede 旧版），失败时旧版不动。 */
@@ -85,6 +91,11 @@ public class CodeIngestService {
         }
         Response<List<Embedding>> embeddingsResponse = embeddingModel.embedAll(segments);
         embeddingStore.addAll(embeddingsResponse.content(), segments);
+        try {
+            documentBlobService.save(fileName, version, fileName, "text/plain; charset=UTF-8", bytes);
+        } catch (Exception e) {
+            log.warn("原件保存失败 source={} version={}", fileName, version, e);
+        }
         documentManageService.publishVersion(fileName, batch, status);
         return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility, status);
     }

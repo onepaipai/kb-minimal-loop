@@ -1,9 +1,11 @@
 package com.example.kb.controller;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 import com.example.kb.common.Visibility;
+import com.example.kb.dto.FaqBatchDeleteRequest;
 import com.example.kb.dto.FaqCreateRequest;
 import com.example.kb.dto.FaqUpdateRequest;
 import com.example.kb.security.DepartmentScope;
@@ -103,6 +105,45 @@ public class FaqController {
         boolean deleted = faqService.delete(id);
         auditService.record(caller.username(), "DELETE_FAQ", String.valueOf(id), null);
         return java.util.Map.of("deleted", deleted);
+    }
+
+    /** 批量删标准答案：先统一校验全部行级权限，任一越权整体 403；再逐条删（非原子）。 */
+    @PostMapping("/batch-delete")
+    @PreAuthorize("hasRole('ADMIN') or hasRole('DEPT_ADMIN')")
+    public java.util.Map<String, Object> batchDelete(@RequestBody FaqBatchDeleteRequest request) {
+        UserPrincipal caller = DepartmentScope.requireCurrentUser();
+        List<UUID> ids = requireIds(request);
+        for (UUID id : ids) {
+            requireCanManageEntry(caller, faqService.get(id).department());
+        }
+        List<String> deleted = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+        for (UUID id : ids) {
+            try {
+                boolean ok = faqService.delete(id);
+                auditService.record(caller.username(), "DELETE_FAQ", String.valueOf(id), null);
+                if (ok) {
+                    deleted.add(String.valueOf(id));
+                } else {
+                    failed.add(String.valueOf(id) + ": 不存在");
+                }
+            } catch (Exception e) {
+                failed.add(String.valueOf(id) + ": " + e.getMessage());
+            }
+        }
+        return java.util.Map.of("requested", ids.size(), "deleted", deleted, "failed", failed);
+    }
+
+    /** 批量入参校验：1-50 个不重复的 id。 */
+    private List<UUID> requireIds(FaqBatchDeleteRequest request) {
+        if (request == null || request.getIds() == null || request.getIds().isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ids 不能为空");
+        }
+        List<UUID> ids = request.getIds().stream().filter(java.util.Objects::nonNull).distinct().toList();
+        if (ids.isEmpty() || ids.size() > 50) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ids 需为 1-50 个有效 id");
+        }
+        return ids;
     }
 
     /**

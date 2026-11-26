@@ -1,5 +1,6 @@
 package com.example.kb.controller;
 
+import com.example.kb.dto.SessionBatchDeleteRequest;
 import com.example.kb.security.UserPrincipal;
 import com.example.kb.service.ChatSessionService;
 import org.junit.jupiter.api.AfterEach;
@@ -8,13 +9,16 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.time.OffsetDateTime;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -70,5 +74,28 @@ class SessionControllerTest {
 
         assertEquals(true, result.get("deleted"));
         verify(chatSessionService).delete(eq("alice"), eq("s1"));
+    }
+
+    @Test
+    void batchDeleteReturnsDeletedAndFailed() {
+        when(chatSessionService.delete("alice", "s1")).thenReturn(true);
+        when(chatSessionService.delete("alice", "s2")).thenReturn(false);
+        SessionBatchDeleteRequest request = new SessionBatchDeleteRequest();
+        request.setIds(List.of("s1", "s2", "s1"));
+
+        java.util.Map<String, Object> result = controller.batchDelete(request);
+
+        assertEquals(2, result.get("requested"));
+        assertEquals(List.of("s1"), result.get("deleted"));
+        assertEquals(List.of("s2: 不存在"), result.get("failed"));
+    }
+
+    @Test
+    void batchDeleteRejectsEmptyIds() {
+        SessionBatchDeleteRequest request = new SessionBatchDeleteRequest();
+        request.setIds(List.of());
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> controller.batchDelete(request));
+        assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
     }
 }

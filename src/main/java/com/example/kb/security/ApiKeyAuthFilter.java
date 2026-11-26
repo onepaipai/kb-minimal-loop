@@ -51,10 +51,10 @@ public class ApiKeyAuthFilter extends OncePerRequestFilter {
         filterChain.doFilter(request, response);
     }
 
-    /** ask 范围的 Key 能调的接口：问答、流式问答、机器人问答、文档清单、版本列表（都是只读）。 */
+    /** ask 范围的 Key 能调的接口：问答、流式问答、机器人问答、纯检索、文档清单、版本列表（都是只读）。 */
     private static boolean isAskScopePath(String method, String path) {
         return ("POST".equalsIgnoreCase(method) && ("/api/ask".equals(path) || "/api/ask-stream".equals(path)
-                || "/api/bot/ask".equals(path)))
+                || "/api/bot/ask".equals(path) || "/api/search".equals(path)))
                 || ("GET".equalsIgnoreCase(method)
                         && ("/api/documents".equals(path) || "/api/document/versions".equals(path)));
     }

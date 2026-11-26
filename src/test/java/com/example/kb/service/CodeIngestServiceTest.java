@@ -34,6 +34,9 @@ class CodeIngestServiceTest {
     @Mock
     DocumentManageService documentManageService;
 
+    @Mock
+    DocumentBlobService documentBlobService;
+
     @Test
     void oversizedMethodSplitsAtBlankLines() throws Exception {
         String block = "        System.out.println(\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\");\n".repeat(60);
@@ -43,7 +46,7 @@ class CodeIngestServiceTest {
         when(documentManageService.countBySource(anyString())).thenReturn(4);
         when(embeddingModel.embedAll(anyList()))
                 .thenReturn(Response.from(List.of(new Embedding(new float[] {0f}))));
-        CodeIngestService service = new CodeIngestService(embeddingModel, embeddingStore, documentManageService);
+        CodeIngestService service = new CodeIngestService(embeddingModel, embeddingStore, documentManageService, documentBlobService);
         service.ingestJavaBytes(source.getBytes(StandardCharsets.UTF_8), "Big.java", "all", "approved");
         ArgumentCaptor<List<TextSegment>> captor = ArgumentCaptor.forClass(List.class);
         verify(embeddingStore).addAll(anyList(), captor.capture());

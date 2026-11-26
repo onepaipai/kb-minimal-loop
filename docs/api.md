@@ -4,7 +4,7 @@
 
 ## 前端页面
 
-浏览器打开 `http://localhost:8080/` 即可用：企业级外壳——登录页左品牌区右表单；登录后默认进总览仪表盘，统计（入库文档、知识块、注册用户、待审批文档、问答好评率）全部来自真实接口，另有快捷操作与最近入库文档；左侧深色边栏是导航（总览、智能问答、文档管理、审批、部门管理、审计日志、用户管理、改密码）与会话列表（新建、切换、删除对话，记录只存本浏览器）；问答是中央对话气泡（默认流式逐字出，引用分数与原文显示在回答下方，回答下有好评/差评按钮），输入框上方有示例问题，Enter 发送、Shift+Enter 换行；上传文档走异步入库（提交后轮询任务状态，完成后刷新清单）、清单与删除、审批、部门管理、审计日志、用户管理、改密码、双因素开关在侧边栏切视图打开。Access Token 存浏览器 localStorage，8 小时有效；过期后前端先用 Refresh Token（7 天）自动换一对新 Token 再重试，换不到才回登录页。静态文件在 `src/main/resources/static/`（`index.html`、`styles.css`、`app.js`，无构建步骤）；样式用 Tabler v1.7.5（MIT，GitHub tabler/tabler 的 release 构建，`tabler.min.css` 直接放在 static/ 里本地引入，不依赖外网）；`/api/**` 之外的请求全部放行，所以页面不需要登录就能打开，调接口时才要 Token。
+浏览器打开 `http://localhost:8080/` 即可用：企业级外壳——登录页左品牌区右表单；登录后默认进总览仪表盘，统计（入库文档、知识块、注册用户、待审批文档、问答好评率）全部来自真实接口，另有快捷操作与最近入库文档；左侧深色边栏是导航（总览、智能问答、文档管理、审批、部门管理、审计日志、用户管理、改密码）与会话列表（新建、切换、删除对话，记录存服务端 /api/sessions，跨设备同步）；问答是中央对话气泡（默认流式逐字出，引用分数与原文显示在回答下方，回答下有好评/差评按钮），输入框上方有示例问题，Enter 发送、Shift+Enter 换行；上传文档走异步入库（提交后轮询任务状态，完成后刷新清单）、清单与删除、审批、部门管理、审计日志、用户管理、改密码、双因素开关在侧边栏切视图打开。Access Token 存浏览器 localStorage，8 小时有效；过期后前端先用 Refresh Token（7 天）自动换一对新 Token 再重试，换不到才回登录页。静态文件在 `src/main/resources/static/`（`index.html`、`styles.css`、`app.js`，无构建步骤）；样式用 Tabler v1.7.5（MIT，GitHub tabler/tabler 的 release 构建，`tabler.min.css` 直接放在 static/ 里本地引入，不依赖外网）；`/api/**` 之外的请求全部放行，所以页面不需要登录就能打开，调接口时才要 Token。
 
 ## 鉴权（除登录外所有接口都要带 Token）
 
@@ -35,7 +35,7 @@ curl -X POST http://localhost:8080/api/auth/logout -H "Content-Type: application
 - 登录加固：连续 5 次密码错误锁定账号 15 分钟；开了双因素的账号登录时多传 `totpCode`（6 位动态验证码，见 [双因素](#双因素认证totp)）；密码策略：至少 10 位且同时含字母和数字。
 - 限流走数据库（多实例共用）：已登录用户每分钟 120 次，未登录按 IP 每分钟 30 次，超了返回 429。
 - 企业登录（OIDC）：见 [部署](deployment.md) 配好 IdP 后，登录页出现“企业账号登录”按钮；点它跳去 IdP 登录，回来自动进应用。首次登录自动建一个 USER 账号，管理员用 `PUT /api/admin/users/{username}` 调它的角色和部门。相关接口：`GET /api/auth/oidc/enabled`（查是否开启）、`POST /api/auth/oidc/exchange`（凭回调的一次性码换 Token，5 分钟有效、用过即废）。
-- 对外 API Key：给别的系统调数据接口用，不用账号密码登录。请求头带 `X-API-Key: kb_...` 即可（不用再带 Bearer Token），权限就是 Key 创建者的角色；`/api/admin/**` 与 `/api/auth/**` 不认 Key，只能用 JWT。Key 在管理员的“API 密钥”页面创建，明文只显示一次。建 Key 时可限范围：`ask` 只能调问答与清单接口（`POST /api/ask`、`POST /api/ask-stream`、`POST /api/bot/ask`、`GET /api/documents`、`GET /api/document/versions`），`all`（默认）除管理接口外都能调；可填有效期天数（1–3650，不填永不过期），过期后调任何接口都返回 401。
+- 对外 API Key：给别的系统调数据接口用，不用账号密码登录。请求头带 `X-API-Key: kb_...` 即可（不用再带 Bearer Token），权限就是 Key 创建者的角色；`/api/admin/**` 与 `/api/auth/**` 不认 Key，只能用 JWT。Key 在管理员的“API 密钥”页面创建，明文只显示一次。建 Key 时可限范围：`ask` 只能调问答与清单接口（`POST /api/ask`、`POST /api/ask-stream`、`POST /api/bot/ask`、`POST /api/search`、`GET /api/documents`、`GET /api/document/versions`），`all`（默认）除管理接口外都能调；可填有效期天数（1–3650，不填永不过期），过期后调任何接口都返回 401。
 
 ## POST /api/ingest —— 上传文档入库
 
@@ -378,6 +378,66 @@ curl http://localhost:8080/api/sessions/{sessionId}/messages -H "Authorization: 
 curl -X DELETE http://localhost:8080/api/sessions/{sessionId} -H "Authorization: Bearer $TOKEN"
 # 返回 {"deleted":true}
 ```
+
+## 原件下载与文本预览
+
+上传的原始文件字节从入库起保存在 `document_blob` 表（与文档版本同生命周期：删文档、旧版清理时同步删）。历史上传的文件没有原件，只有切块文本。存储可用 `BLOB_ENABLED` 关闭、`BLOB_MAX_SIZE_MB`（默认 10MB）限制单文件体积，超限或关闭时跳过保存但入库照常；在线撰写的知识条目不存原件（它本来就是 .md 正文，预览接口可读）。见 [部署](deployment.md)。
+
+```bash
+# 下载原件（不传 version 取当前版）；Content-Disposition 带原文件名，返回原始字节
+curl -OJ -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8080/api/document/download?source=请假制度.txt&version=1"
+
+# 在线文本预览：按块号拼回当前版全文（含章节前缀，不含原始排版）
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://localhost:8080/api/document/preview?source=请假制度.txt"
+# 返回 {"source":"请假制度.txt","text":"..."}
+```
+
+`GET /api/documents` 的每条记录带 `hasBlob`：为 true 表示该篇有原件可下载。下载/预览都按文档 visibility 与调用者部门做读权限校验（管理员全部、部门管理员本部门、普通用户本部门与全员可见），越权返回 403；版本不存在或没有原件返回 404。
+
+## POST /api/search —— 仅检索（不生成答案）
+
+只返回命中块，不调聊天大模型；向量化与神经重排仍会调用（检索必需）。入参与 `/api/ask` 同规则（question 必填，sources/department/maxResults/minScore 可选），权限走同一套部门过滤，返回 `ReferenceHit` 列表。前端问答区"仅搜索"按钮走这里。
+
+```bash
+curl -X POST http://localhost:8080/api/search -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"question":"请假超过3天找谁批？","department":"hr"}'
+# 返回 [{"index":1,"score":0.83,"source":"请假制度.txt","text":"……"}]
+```
+
+命中标准答案时返回一条 `source="标准答案"` 的命中块。scope 为 `ask` 的 API Key 也可调此接口。该接口不写会话历史，只记一条 `SEARCH` 审计日志。
+
+## 批量删除
+
+四类清单都支持批量删除：先统一校验全部行级权限（任一越权整体 403），再逐条删除，返回成功与失败清单。**非原子操作**（pgvector 与 JDBC 无法本地事务统一），失败项单独列出。单次上限 50 条，重复项自动去重。
+
+```bash
+# 文档：按 source 批量删
+curl -X POST http://localhost:8080/api/document/batch-delete -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"sources":["请假制度.txt","报销制度.txt"]}'
+
+# 标准答案 / 知识条目 / 会话：按 id 批量删
+curl -X POST http://localhost:8080/api/faq/batch-delete -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"ids":["<uuid>","<uuid>"]}'
+curl -X POST http://localhost:8080/api/knowledge/batch-delete -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"ids":["<uuid>"]}'
+curl -X POST http://localhost:8080/api/sessions/batch-delete -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"ids":["web-abc123"]}'
+```
+
+返回 `{"requested":2,"deleted":["..."],"failed":[]}`。文档批量删会连关联的知识条目行与原件一起删；会话按当前用户名天然隔离，别人的会话进 `failed`。列表为空或超过 50 条返回 400。
+
+## GET /api/admin/stats/trend —— 近 N 天趋势（仅 ADMIN）
+
+按天聚合问答反馈、知识盲区与入库任务，缺失的日期补 0，返回按日期升序的连续序列；前端总览的 SVG 柱状图用它。
+
+```bash
+curl "http://localhost:8080/api/admin/stats/trend?days=7" -H "Authorization: Bearer $TOKEN"
+# 返回 [{"date":"2026-11-20","feedback":12,"helpful":10,"misses":2,"ingests":3}, ...]
+```
+
+`days` 默认 7，允许 1-30；非管理员返回 403。
 
 ## 健康检查
 

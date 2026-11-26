@@ -40,6 +40,8 @@ class IngestServiceTest {
     private EmbeddingStore<TextSegment> embeddingStore;
     @Mock
     private DocumentManageService documentManageService;
+    @Mock
+    private DocumentBlobService documentBlobService;
 
     @Test
     void sameContentSkipsWithoutEmbedding() throws Exception {
@@ -47,7 +49,7 @@ class IngestServiceTest {
         when(documentManageService.findFileHash("a.txt")).thenReturn(IngestService.sha256Hex(bytes));
         when(documentManageService.countBySource("a.txt")).thenReturn(3);
         IngestService service = new IngestService(documentSplitter, embeddingModel, embeddingStore,
-                documentManageService);
+                documentManageService, documentBlobService);
 
         var response = service.ingestBytes(bytes, "a.txt", "all", "approved");
 
@@ -74,7 +76,7 @@ class IngestServiceTest {
         when(embeddingModel.embedAll(anyList()))
                 .thenReturn(Response.from(List.of(new Embedding(new float[] {0f}))));
         IngestService service = new IngestService(documentSplitter, embeddingModel, embeddingStore,
-                documentManageService);
+                documentManageService, documentBlobService);
 
         var response = service.ingestBytes(bytes, "a.txt", "all", "approved");
 
@@ -108,7 +110,7 @@ class IngestServiceTest {
         when(embeddingModel.embedAll(anyList()))
                 .thenReturn(Response.from(List.of(new Embedding(new float[] {0f}))));
         IngestService service = new IngestService(documentSplitter, embeddingModel, embeddingStore,
-                documentManageService);
+                documentManageService, documentBlobService);
 
         var response = service.ingestBytes(bytes, "假期.xlsx", "all", "approved");
 
@@ -137,7 +139,7 @@ class IngestServiceTest {
         when(embeddingModel.embedAll(anyList()))
                 .thenReturn(Response.from(List.of(new Embedding(new float[] {0f}))));
         IngestService service = new IngestService(documentSplitter, embeddingModel, embeddingStore,
-                documentManageService);
+                documentManageService, documentBlobService);
 
         var response = service.ingestBytes(bytes, "假期.pptx", "all", "approved");
 

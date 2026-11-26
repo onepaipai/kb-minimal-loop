@@ -30,9 +30,11 @@ class DocumentManageServiceTest {
     private JdbcTemplate jdbcTemplate;
     @Mock
     private EmbeddingStore<TextSegment> embeddingStore;
+    @Mock
+    private DocumentBlobService documentBlobService;
 
     private DocumentManageService service() {
-        return new DocumentManageService(jdbcTemplate, embeddingStore);
+        return new DocumentManageService(jdbcTemplate, embeddingStore, documentBlobService);
     }
 
     @Test

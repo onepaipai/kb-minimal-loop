@@ -49,6 +49,15 @@ public class ChatSessionService {
      */
     public void append(String username, String sessionId, String department, String question,
                        String answer, List<ReferenceHit> hits) {
+        appendQuestion(username, sessionId, department, question);
+        completeAnswer(username, sessionId, answer, hits);
+    }
+
+    /**
+     * 提问即落库：会话不存在则建（标题取首问），先插用户消息；回答生成完再调 completeAnswer 补上助手消息。
+     * sessionId 为空直接跳过（不建会话）；保存失败只打 WARN，不影响问答主流程。
+     */
+    public void appendQuestion(String username, String sessionId, String department, String question) {
         if (sessionId == null || sessionId.isBlank()) {
             return;
         }
@@ -61,12 +70,26 @@ public class ChatSessionService {
                             + "VALUES (?, ?, ?, ?, ?, ?::jsonb)",
                     UUID.randomUUID(), username, cleanSessionId, "user",
                     truncate(question, MAX_CONTENT_LENGTH), null);
+        } catch (Exception e) {
+            log.warn("会话提问保存失败 user={} session={}", username, cleanSessionId, e);
+        }
+    }
+
+    /** 回答生成完成后补写助手消息（含 refs）；sessionId 为空或写库失败都不影响问答主流程。 */
+    public void completeAnswer(String username, String sessionId, String answer, List<ReferenceHit> hits) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+        String cleanSessionId = sessionId.trim();
+        try {
             jdbcTemplate.update("INSERT INTO chat_message(id, username, session_id, role, content, refs) "
                             + "VALUES (?, ?, ?, ?, ?, ?::jsonb)",
                     UUID.randomUUID(), username, cleanSessionId, "assistant",
                     truncate(answer, MAX_CONTENT_LENGTH), toJson(hits));
+            jdbcTemplate.update("UPDATE chat_session SET updated_at = now() WHERE username = ? AND id = ?",
+                    username, cleanSessionId);
         } catch (Exception e) {
-            log.warn("会话历史保存失败 user={} session={}", username, cleanSessionId, e);
+            log.warn("会话回答保存失败 user={} session={}", username, cleanSessionId, e);
         }
     }
 

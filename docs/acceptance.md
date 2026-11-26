@@ -55,3 +55,11 @@
 53. 知识条目：编辑器（EDITOR）新建知识条目返回 status=pending，问答查不到，管理员在清单 `?status=pending` 能看到并批准后问答命中；管理员新建直接 approved；详情接口返回正文全文供编辑回填；更新正文后重新入库、块数更新且版本 +1；删除后清单与问答都查不到；普通用户新建返回 403；`status` 传非法值返回 400
 54. 机器人问答：建一个 scope=ask 的 API Key，用 `X-API-Key` 不带头调 `POST /api/bot/ask`，通用入参 `{"question":"请假超过3天找谁批？"}` 返回 `{"answer":"...","sources":[...]}`；钉钉/企微入参 `{"platform":"wecom","text":{"content":"..."}}` 返回 `{"msgtype":"text","text":{"content":"..."}}`；两种消息体都没有问题文本返回 400；审计日志里能看到 BOT_ASK 记录
 55. 会话历史：问答后 `GET /api/sessions` 能看到该会话（最近更新在前），`GET /api/sessions/{id}/messages` 按时间正序返回用户问与助手答且 refs 有值；别人的 sessionId 查消息返回空列表、删返回 `{"deleted":false}`；`DELETE /api/sessions/{id}` 后清单里该会话消失、消息查不到；重启服务后历史仍在（与 24 小时清理的短期记忆互不影响）
+56. 原件下载与预览：上传一篇 .pdf 后清单里该项 `hasBlob=true`；点"下载"或用 `GET /api/document/download?source=...` 能拿回与上传时字节一致的原文件（Content-Disposition 带文件名）；指定 `version=1` 能下到旧版原件；`GET /api/document/preview` 按块号拼回全文且含章节前缀；越权部门下载返回 403；删文档后原件也删掉、再下载返回 404；历史上传（本次改动前入库）的文件没有原件，下载返回 404 且提示"未保存原件"
+57. 仅搜索：`POST /api/search` 只返回命中块列表（含 index/score/source/text），不生成答案、不写会话历史；结果与同一问题的 `/api/ask` 的 hits 一致；命中标准答案时返回一条 `source="标准答案"` 的块；question 为空、maxResults=0、minScore=2 返回 400；scope=ask 的 API Key 能调；审计日志有 SEARCH 记录；前端"仅搜索"按钮能渲染命中块
+58. 批量删除：文档/标准答案/知识条目/会话四类清单勾选多项后批量删除，返回 `{"requested":N,"deleted":[...],"failed":[...]}` 且清单刷新后只剩未删项；任一越权项整体返回 403 而不删任何一条；空列表或超过 50 条返回 400；文档批量删连关联知识条目行与原件一起删；会话只删自己的
+59. 趋势图：管理员打开总览能看到"近 7 天趋势"柱状图（反馈/盲区/入库三组），`GET /api/admin/stats/trend?days=7` 返回 7 条按日期升序的连续序列、缺失日期补 0；`days=31` 返回 400；普通用户看不到图表且调接口返回 403
+60. 提问即落库：流式/整段问答发出后立刻查 `GET /api/sessions/{id}/messages` 就能看到 user 消息，回答完成后才有 assistant 消息；中途刷新页面该提问仍在历史里；流式出错时保留已落库的提问；sessionId 为空时不建会话（约定不变）
+61. 前端新入口：文档清单有"下载/预览/批量删除"，问答区有"仅搜索"，FAQ/知识条目/会话清单有"批量删除"，总览有趋势图，各按钮都能正常调对应接口且错误有提示
+62. 原件容量治理：`BLOB_ENABLED=false` 时上传文件仍正常入库但清单 `hasBlob=false`、下载返回 404；单文件超过 `BLOB_MAX_SIZE_MB`（默认 10MB）时跳过保存且入库不失败；在线撰写的知识条目不产生原件（`hasBlob=false`），但 `/api/document/preview` 仍能读到它的全文
+63. 前端拆分与检索主干：`features.js` 单独加载且在 `app.js` 之前，页面打开后所有新功能按钮仍可用；`RagService.retrieveChunks` 是唯一检索主干，`/api/search` 与 `/api/ask` 的命中块在同一数据下完全一致（权限、过滤、重排规则不再有两份实现）

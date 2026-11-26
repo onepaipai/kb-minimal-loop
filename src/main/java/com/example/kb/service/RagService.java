@@ -94,6 +94,8 @@ public class RagService {
      * 有命中时先删超出引用范围的编号，再校验每个引用有没有文本依据。
      */
     public AskResponse ask(AskRequest request, AskScope scope) {
+        chatSessionService.appendQuestion(scope.username(), request.getSessionId(), scope.department(),
+                request.getQuestion());
         PreparedAsk prepared = prepare(request, scope);
         String answer;
         if (prepared.standardAnswer() != null) {
@@ -108,8 +110,7 @@ public class RagService {
         }
         saveMemory(prepared, request.getQuestion(), answer);
         recordMissIfNeeded(answer, scope, request.getQuestion());
-        chatSessionService.append(scope.username(), request.getSessionId(), scope.department(),
-                request.getQuestion(), answer, prepared.hits());
+        chatSessionService.completeAnswer(scope.username(), request.getSessionId(), answer, prepared.hits());
 
         AskResponse response = new AskResponse();
         response.setAnswer(answer);
@@ -126,17 +127,20 @@ public class RagService {
     /**
      * 流式检索问答：先发一次引用来源，再逐 token 发答案，最后发完成；出错走 onError。
      * 多轮记忆只在完整答案拿到后存一次，绝不在每个 token 到达时存。
+     * 会话历史的用户提问在开头就落库（中途刷新也能看到），助手回答在完整答案拿到后补写；出错时保留已落库的提问。
      * 命中标准答案或无命中时直接发整段回答，不调模型；流式 token 边收边过引用过滤器，
      * 超范围的 [n] 发出去之前就删掉，存进记忆与会话历史的是同一份过滤后并校验过的文本。
      */
     public void askStream(AskRequest request, AskScope scope, StreamListener listener) {
+        chatSessionService.appendQuestion(scope.username(), request.getSessionId(), scope.department(),
+                request.getQuestion());
         PreparedAsk prepared = prepare(request, scope);
         listener.onSources(prepared.hits());
         if (prepared.standardAnswer() != null) {
             listener.onToken(prepared.standardAnswer());
             saveMemory(prepared, request.getQuestion(), prepared.standardAnswer());
-            chatSessionService.append(scope.username(), request.getSessionId(), scope.department(),
-                    request.getQuestion(), prepared.standardAnswer(), prepared.hits());
+            chatSessionService.completeAnswer(scope.username(), request.getSessionId(),
+                    prepared.standardAnswer(), prepared.hits());
             listener.onComplete();
             return;
         }
@@ -144,8 +148,8 @@ public class RagService {
             listener.onToken(NOT_FOUND_ANSWER);
             saveMemory(prepared, request.getQuestion(), NOT_FOUND_ANSWER);
             recordMissIfNeeded(NOT_FOUND_ANSWER, scope, request.getQuestion());
-            chatSessionService.append(scope.username(), request.getSessionId(), scope.department(),
-                    request.getQuestion(), NOT_FOUND_ANSWER, prepared.hits());
+            chatSessionService.completeAnswer(scope.username(), request.getSessionId(),
+                    NOT_FOUND_ANSWER, prepared.hits());
             listener.onComplete();
             return;
         }
@@ -179,8 +183,8 @@ public class RagService {
                         sanitizeCitations(answer, prepared.hits().size()), RagAnswerHelper.chunkTexts(prepared.hits()));
                 saveMemory(prepared, request.getQuestion(), finalAnswer);
                 recordMissIfNeeded(finalAnswer, scope, request.getQuestion());
-                chatSessionService.append(scope.username(), request.getSessionId(), scope.department(),
-                        request.getQuestion(), finalAnswer, prepared.hits());
+                chatSessionService.completeAnswer(scope.username(), request.getSessionId(),
+                        finalAnswer, prepared.hits());
                 listener.onComplete();
             }
 
@@ -192,23 +196,33 @@ public class RagService {
     }
 
     /**
-     * 共用准备：先匹配标准答案（命中即短路，不检索不调模型）；未命中再走
-     * 问题向量化 → 检索 → 拼带编号的资料段与问题 → 取会话历史，拼成发给模型的消息列表。
+     * 纯检索：FAQ 匹配或向量+关键词混合检索，只返回命中块，不调聊天模型。
+     * 与问答 prepare 共用 retrieveChunks，避免权限/检索规则漂移；向量化与重排是检索必需，仍会调用。
      */
-    private PreparedAsk prepare(AskRequest request, AskScope scope) {
+    public List<ReferenceHit> searchHits(AskRequest request, AskScope scope) {
         Optional<FaqService.FaqEntry> standard = faqService.match(request.getQuestion(), scope.department());
         if (standard.isPresent()) {
-            ReferenceHit hit = new ReferenceHit();
-            hit.setIndex(1);
-            hit.setScore(1.0);
-            hit.setSource("标准答案");
-            hit.setText(standard.get().answer());
-            List<ReferenceHit> hits = new ArrayList<>();
-            hits.add(hit);
-            List<String> sources = new ArrayList<>();
-            sources.add("标准答案");
-            return new PreparedAsk(null, buildChatMemory(request, scope), hits, sources, standard.get().answer());
+            return List.of(standardHit(standard.get().answer()));
         }
+        List<HybridSearchService.RetrievedChunk> chunks = retrieveChunks(request, scope);
+        return new RagPromptBuilder().build(chunks, request.getQuestion()).hits();
+    }
+
+    /** 标准答案命中：包装成一条引用块，搜索与问答共用。 */
+    private ReferenceHit standardHit(String answer) {
+        ReferenceHit hit = new ReferenceHit();
+        hit.setIndex(1);
+        hit.setScore(1.0);
+        hit.setSource("标准答案");
+        hit.setText(answer);
+        return hit;
+    }
+
+    /**
+     * 检索主干：问题向量化 → 权限 Filter → 向量+关键词混合检索（含 RRF 融合与神经重排）。
+     * searchHits 与 prepare 共用，改权限或检索规则只改这一处。
+     */
+    private List<HybridSearchService.RetrievedChunk> retrieveChunks(AskRequest request, AskScope scope) {
         Response<Embedding> embeddingResponse = embeddingModel.embed(request.getQuestion());
         int maxResults = RagPromptBuilder.MAX_RESULTS;
         if (request.getMaxResults() != null) {
@@ -228,11 +242,25 @@ public class RagService {
             filter = filter.and(MetadataFilterBuilder.metadataKey(MetadataKeys.SOURCE)
                     .isIn(request.getSources().toArray(new String[0])));
         }
-        // 混合检索：向量路 + 关键词路 RRF 融合；老块没有 status 字段时须先跑回填 SQL（见 docs/architecture.md），否则查不到
-        List<HybridSearchService.RetrievedChunk> chunks = hybridSearchService.search(
-                embeddingResponse.content(), filter, request.getQuestion(), department,
+        // 老块没有 status 字段时须先跑回填 SQL（见 docs/architecture.md），否则向量路查不到
+        return hybridSearchService.search(embeddingResponse.content(), filter, request.getQuestion(), department,
                 request.getSources(), maxResults, minScore);
+    }
 
+    /**
+     * 共用准备：先匹配标准答案（命中即短路，不检索不调模型）；未命中再走
+     * 问题向量化 → 检索 → 拼带编号的资料段与问题 → 取会话历史，拼成发给模型的消息列表。
+     */
+    private PreparedAsk prepare(AskRequest request, AskScope scope) {
+        Optional<FaqService.FaqEntry> standard = faqService.match(request.getQuestion(), scope.department());
+        if (standard.isPresent()) {
+            List<ReferenceHit> hits = new ArrayList<>();
+            hits.add(standardHit(standard.get().answer()));
+            List<String> sources = new ArrayList<>();
+            sources.add("标准答案");
+            return new PreparedAsk(null, buildChatMemory(request, scope), hits, sources, standard.get().answer());
+        }
+        List<HybridSearchService.RetrievedChunk> chunks = retrieveChunks(request, scope);
         RagPromptParts promptParts = new RagPromptBuilder().build(chunks, request.getQuestion());
         ChatMemory chatMemory = buildChatMemory(request, scope);
         List<ChatMessage> messages = promptParts.messages();

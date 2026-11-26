@@ -211,8 +211,10 @@ async function loadDashboard() {
         } catch (e) {
             // 好评率拿不到不影响总览其余内容
         }
+        loadTrend();
     }
 }
+
 
 /* ---------------- 会话（服务端保存，跨设备同步） ---------------- */
 
@@ -303,18 +305,23 @@ function renderSessionList() {
     const list = $('sessionList');
     list.textContent = '';
     cachedSessions.forEach((session) => {
-        const item = document.createElement('button');
-        item.type = 'button';
+        const item = document.createElement('div');
         item.className = 'session-item' + (session.id === currentSessionId ? ' active' : '');
-        const title = document.createElement('span');
-        title.className = 'session-title';
-        title.textContent = session.title || '新对话';
+        const check = document.createElement('input');
+        check.type = 'checkbox';
+        check.className = 'session-checkbox me-1';
+        check.dataset.id = session.id;
+        check.addEventListener('click', (e) => e.stopPropagation());
+        const open = document.createElement('button');
+        open.type = 'button';
+        open.className = 'session-title';
+        open.textContent = session.title || '新对话';
+        open.addEventListener('click', () => switchSession(session.id));
         const del = document.createElement('span');
         del.className = 'session-del';
         del.textContent = '×';
         del.addEventListener('click', (e) => deleteSession(session.id, e));
-        item.append(title, del);
-        item.addEventListener('click', () => switchSession(session.id));
+        item.append(check, open, del);
         list.appendChild(item);
     });
 }
@@ -435,6 +442,7 @@ function buildAskRequest(question) {
     }
     return request;
 }
+
 
 async function askOnce(request, bubble) {
     const response = await api('/api/ask', { method: 'POST', body: request });
@@ -568,6 +576,15 @@ async function loadDocuments(page) {
         tbody.textContent = '';
         (data.documents || []).forEach((doc) => {
             const row = document.createElement('tr');
+            const select = document.createElement('td');
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'doc-checkbox';
+            checkbox.dataset.source = doc.source;
+            const canManage = currentUser && (currentUser.role === 'ADMIN'
+                || (currentUser.role === 'DEPT_ADMIN' && currentUser.department === doc.visibility));
+            checkbox.disabled = !canManage;
+            select.appendChild(checkbox);
             const source = document.createElement('td');
             source.textContent = doc.source;
             const chunks = document.createElement('td');
@@ -579,18 +596,30 @@ async function loadDocuments(page) {
             const version = document.createElement('td');
             version.textContent = 'v' + doc.version;
             const action = document.createElement('td');
-            const canDelete = currentUser && (currentUser.role === 'ADMIN'
-                || (currentUser.role === 'DEPT_ADMIN' && currentUser.department === doc.visibility));
+            const canDelete = canManage;
+            if (doc.hasBlob) {
+                const download = document.createElement('button');
+                download.type = 'button';
+                download.className = 'btn btn-outline-primary btn-sm';
+                download.textContent = '下载';
+                download.addEventListener('click', () => downloadDocument(doc.source));
+                action.appendChild(download);
+            }
+            const preview = document.createElement('button');
+            preview.type = 'button';
+            preview.className = 'btn btn-outline-secondary btn-sm ms-1';
+            preview.textContent = '预览';
+            preview.addEventListener('click', () => previewDocument(doc.source));
+            action.appendChild(preview);
             if (canDelete) {
                 const del = document.createElement('button');
                 del.type = 'button';
-                del.className = 'btn btn-outline-danger btn-sm';
+                del.className = 'btn btn-outline-danger btn-sm ms-1';
                 del.textContent = '删除';
                 del.addEventListener('click', () => deleteDocument(doc.source));
                 action.appendChild(del);
             }
-            const canApprove = currentUser && (currentUser.role === 'ADMIN'
-                || (currentUser.role === 'DEPT_ADMIN' && currentUser.department === doc.visibility));
+            const canApprove = canManage;
             if (canApprove && doc.version > 1) {
                 const rollback = document.createElement('button');
                 rollback.type = 'button';
@@ -599,7 +628,7 @@ async function loadDocuments(page) {
                 rollback.addEventListener('click', () => rollbackDocument(doc.source, doc.version));
                 action.appendChild(rollback);
             }
-            row.append(source, chunks, visibility, status, version, action);
+            row.append(select, source, chunks, visibility, status, version, action);
             tbody.appendChild(row);
         });
         const totalPages = Math.max(1, Math.ceil(data.total / DOCS_PAGE_SIZE));
@@ -610,6 +639,9 @@ async function loadDocuments(page) {
         showMessage(e.message);
     }
 }
+
+
+
 
 async function deleteDocument(source) {
     if (!window.confirm('确定删除「' + source + '」吗？')) {
@@ -924,6 +956,14 @@ async function loadEntries() {
         tbody.textContent = '';
         (entries || []).forEach((entry) => {
             const row = document.createElement('tr');
+            const select = document.createElement('td');
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'entry-checkbox';
+            checkbox.dataset.id = entry.id;
+            checkbox.disabled = !(currentUser && (currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN'
+                || entry.username === currentUser.username));
+            select.appendChild(checkbox);
             const title = document.createElement('td');
             title.textContent = entry.title;
             const category = document.createElement('td');
@@ -953,7 +993,7 @@ async function loadEntries() {
                 del.addEventListener('click', () => deleteEntry(entry.id, entry.title));
                 action.append(edit, del);
             }
-            row.append(title, category, tags, visibility, status, updated, action);
+            row.append(select, title, category, tags, visibility, status, updated, action);
             tbody.appendChild(row);
         });
     } catch (e) {
@@ -1028,6 +1068,8 @@ $('entryForm').addEventListener('submit', async (e) => {
 });
 
 $('entryCancelEditBtn').addEventListener('click', resetEntryForm);
+
+
 $('refreshEntriesBtn').addEventListener('click', () => loadEntries());
 
 /* ---------------- 标准答案（置顶 FAQ） ---------------- */
@@ -1047,6 +1089,12 @@ async function loadFaqs() {
         tbody.textContent = '';
         (faqs || []).forEach((faq) => {
             const row = document.createElement('tr');
+            const select = document.createElement('td');
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'faq-checkbox';
+            checkbox.dataset.id = faq.id;
+            select.appendChild(checkbox);
             const question = document.createElement('td');
             question.textContent = faq.question;
             const keywords = document.createElement('td');
@@ -1078,7 +1126,7 @@ async function loadFaqs() {
             del.textContent = '删除';
             del.addEventListener('click', () => deleteFaq(faq.id, faq.question));
             action.append(edit, toggle, del);
-            row.append(question, keywords, department, status, updated, action);
+            row.append(select, question, keywords, department, status, updated, action);
             tbody.appendChild(row);
         });
     } catch (e) {
@@ -1297,6 +1345,7 @@ $('question').addEventListener('keydown', (e) => {
     }
 });
 
+$('searchOnlyBtn').addEventListener('click', () => searchOnly());
 $('askForm').addEventListener('submit', async (e) => {
     e.preventDefault();
     if (asking) {
@@ -1402,6 +1451,13 @@ async function pollIngestJob(jobId) {
 }
 
 $('refreshDocsBtn').addEventListener('click', () => loadDocuments(docsPage));
+$('batchDeleteDocsBtn').addEventListener('click', () => batchDeleteDocuments());
+$('batchDeleteFaqBtn').addEventListener('click', () =>
+    runBatchDelete('/api/faq/batch-delete', selectedIds('faq-checkbox'), '标准答案', () => loadFaqs()));
+$('batchDeleteEntriesBtn').addEventListener('click', () =>
+    runBatchDelete('/api/knowledge/batch-delete', selectedIds('entry-checkbox'), '知识条目', () => loadEntries()));
+$('batchDeleteSessionsBtn').addEventListener('click', () =>
+    runBatchDelete('/api/sessions/batch-delete', selectedIds('session-checkbox'), '会话', () => refreshSessionList()));
 $('prevPageBtn').addEventListener('click', () => loadDocuments(Math.max(0, docsPage - 1)));
 $('nextPageBtn').addEventListener('click', () => loadDocuments(docsPage + 1));
 $('refreshNotifBtn').addEventListener('click', () => loadNotifications(notifPage));
