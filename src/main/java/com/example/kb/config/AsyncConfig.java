@@ -6,7 +6,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
-/** 异步入库线程池：2 个常驻、最多 4 个并发、排队 100 个任务，任务名 ingest- 前缀便于定位。 */
+/** 应用内的有界线程池：异步入库与 SSE 流式问答各用一套，互不拖垮。 */
 @Configuration
 public class AsyncConfig {
 
@@ -18,6 +18,19 @@ public class AsyncConfig {
         executor.setQueueCapacity(100);
         executor.setThreadNamePrefix("ingest-");
         // 守护线程：启动失败（如连不上库）时 JVM 能直接退出，不会被池子里的空闲线程吊住
+        executor.setDaemon(true);
+        executor.initialize();
+        return executor;
+    }
+
+    /** SSE 流式问答专用线程池：与入库隔离，避免长连接占满 commonPool；客户端断开时任务被取消。 */
+    @Bean("streamExecutor")
+    public Executor streamExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(8);
+        executor.setQueueCapacity(50);
+        executor.setThreadNamePrefix("stream-");
         executor.setDaemon(true);
         executor.initialize();
         return executor;

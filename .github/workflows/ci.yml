@@ -19,3 +19,22 @@ jobs:
       # 只跑单元测试（Visibility / DepartmentScope），不需要数据库与 API Key；
       # 需要 Neon 与 Key 的接口验收见 docs/acceptance.md，本地按清单跑
       - run: mvn -B verify
+      # 前端静态检查：无构建步骤，直接校验原生 JS 语法
+      - name: 检查前端 JS 语法
+        run: |
+          for f in src/main/resources/static/app.js src/main/resources/static/features.js src/main/resources/static/ui-enhance.js; do
+            node --check "$f"
+          done
+      # 文档一致性：验收编号必须连续，README 里的条数必须与实际一致
+      - name: 检查验收清单与 README 一致
+        run: |
+          python3 - <<'PY'
+          import re
+          lines = open('docs/acceptance.md', encoding='utf-8').read().splitlines()
+          nums = [int(m.group(1)) for line in lines if (m := re.match(r'^(\d+)\.', line))]
+          assert nums == list(range(1, len(nums) + 1)), f'验收编号不连续: {nums}'
+          readme = open('README.md', encoding='utf-8').read()
+          match = re.search(r'(\d+) 条验收清单', readme)
+          assert match and int(match.group(1)) == len(nums), 'README 验收条数与实际不一致'
+          print(f'验收清单 {len(nums)} 条，编号连续，README 一致')
+          PY

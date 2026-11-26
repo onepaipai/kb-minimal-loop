@@ -71,3 +71,6 @@
 69. 搜索增强：`/api/search/grouped` 按来源分组返回且每条 hit 带 matchedTerms，前端折叠展示并高亮命中词；引用块点"查看原文"打开预览抽屉（原 `window.alert` 已移除）；`/api/knowledge` 支持 category/tag 筛选，`/api/admin/tags` 返回动态字典
 70. UI 重构：`theme.css` 变量层覆盖硬编码色，明暗主题可切换且 localStorage 记忆；卡片/气泡有阴影与过渡，焦点可见、表格行 hover、引用卡片化（编号徽章 + 折叠）、空/加载/错误三态、内联 SVG 图标、575/991 响应式断点、必填标识与侧栏遮罩（Esc/点击关闭）
 71. 文档一致性：上述新接口在 api.md 都有章节，验收编号 1-71 连续，README 验收条数与代码结构清单同步，架构文档写明并行检索、向量缓存与前端模块划分
+72. SSE 资源治理：`/api/ask-stream` 跑在独立 `streamExecutor`（与 ingestExecutor 隔离），不再用 commonPool；`SseEmitter` 注册 onCompletion/onTimeout/onError 取消后台任务；前端点"停止生成"或断开连接后，服务端不再继续向 emitter 写 token；正常完成时 cancel 无副作用
+73. CI 静态检查：push/PR 触发时除 `mvn -B verify` 外，还跑三个 JS 文件的 `node --check` 与验收清单编号连续/README 条数一致性检查；编号断档或条数不符时 CI 失败
+74. 批量操作分层：批量删/审批/改可见性集中在 `DocumentBatchController`（只做校验与权限预检）+ `DocumentBatchService`（执行），单条审批与批量审批共用 `reviewOne`；文档清单与审批结果行为与拆分前一致，`DocumentBatchControllerTest` / `DocumentBatchServiceTest` 通过

@@ -3,6 +3,7 @@ package com.example.kb.controller;
 import java.io.IOException;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
 
 import com.example.kb.common.Visibility;
 import com.example.kb.dto.AskRequest;
@@ -11,6 +12,7 @@ import com.example.kb.dto.ReferenceHit;
 import com.example.kb.service.AuditService;
 import com.example.kb.security.DepartmentScope;
 import com.example.kb.service.RagService;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -33,10 +35,13 @@ public class AskController {
 
     private final RagService ragService;
     private final AuditService auditService;
+    private final Executor streamExecutor;
 
-    public AskController(RagService ragService, AuditService auditService) {
+    public AskController(RagService ragService, AuditService auditService,
+                         @Qualifier("streamExecutor") Executor streamExecutor) {
         this.ragService = ragService;
         this.auditService = auditService;
+        this.streamExecutor = streamExecutor;
     }
 
     /** 基于知识库检索结果回答问题。入参越界一律 400。 */
@@ -51,7 +56,7 @@ public class AskController {
     /**
      * 流式问答：与 /api/ask 同一套检索与校验，答案逐 token 以 SSE 推送。
      * 事件顺序：sources（引用来源）→ token（逐个）→ done；出错时 completeWithError。
-     * 流式调用跑在独立线程，接口立即返回 emitter；作用域在请求线程里算好传进去。
+     * 任务跑在 streamExecutor（与入库隔离），客户端断开/超时时取消后台任务，不再继续烧模型 token。
      */
     @PostMapping(value = "/ask-stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
     public SseEmitter askStream(@RequestBody AskRequest request) {
@@ -59,7 +64,12 @@ public class AskController {
         RagService.AskScope scope = DepartmentScope.askScope(DepartmentScope.currentUser(), request.getDepartment());
         auditService.record(scope.username(), "ASK", request.getSessionId(), request.getQuestion());
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MILLIS);
-        CompletableFuture.runAsync(() -> streamTo(request, scope, emitter));
+        CompletableFuture<Void> future = CompletableFuture.runAsync(
+                () -> streamTo(request, scope, emitter), streamExecutor);
+        Runnable stop = () -> future.cancel(true);
+        emitter.onCompletion(stop);
+        emitter.onTimeout(stop);
+        emitter.onError(error -> stop.run());
         return emitter;
     }
 

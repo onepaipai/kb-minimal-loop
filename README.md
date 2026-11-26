@@ -27,7 +27,7 @@ curl -X POST http://localhost:8080/api/ask -H "Authorization: Bearer $TOKEN" -H 
 - [架构](docs/architecture.md)——模块划分、数据流、关键决策与已知缺口
 - [接口](docs/api.md)——全部接口、SSE 事件、统一错误体
 - [部署](docs/deployment.md)——Neon、环境变量、启动
-- [验收](docs/acceptance.md)——71 条验收清单
+- [验收](docs/acceptance.md)——74 条验收清单
 
 `docs/samples/` 下为示例文档（请假 / 报销 / 考勤制度），可直接上传验证。前端企业级单页在 `src/main/resources/static/`（`index.html`、`styles.css` 基础布局 + `theme.css` 设计系统覆盖层、`app.js` 主体 + `features.js` / `ui-enhance.js` 功能模块，无构建步骤，样式为 Tabler v1.7.5 的 `tabler.min.css`，支持明暗主题，启动后打开 `http://localhost:8080/`）。
 
@@ -40,7 +40,7 @@ src/main/java/com/example/kb/
 │   ├── ChatModelConfig.java           # DeepSeek 聊天 + 流式聊天
 │   ├── EmbeddingConfig.java           # DashScope 向量 + 切块器
 │   ├── VectorStoreConfig.java         # pgvector 向量库
-│   └── AsyncConfig.java               # 异步入库线程池（ingest- 前缀，守护线程）
+│   └── AsyncConfig.java               # ingestExecutor 入库 + streamExecutor SSE 两套有界线程池
 ├── controller/                        # 按领域拆分，一个领域一个 Controller
 │   ├── IngestController.java          # POST /api/ingest、/api/ingest-async、GET /api/ingest/jobs/{id}
 │   ├── AskController.java             # POST /api/ask、/api/ask-stream
@@ -58,6 +58,7 @@ src/main/java/com/example/kb/
 │   ├── SearchController.java          # POST /api/search、/search/grouped：仅检索
 │   ├── StatsController.java           # GET /api/admin/stats/trend：按天趋势（仅 ADMIN）
 │   ├── ExportController.java          # GET /api/admin/export：CSV/JSON/MD 导出
+│   ├── DocumentBatchController.java   # 批量删/审批/改可见性：校验与权限预检
 │   ├── MessageController.java         # 消息级操作：删单条、收藏、收藏清单
 │   ├── TagController.java             # GET /api/admin/tags：分类/标签动态字典
 │   └── FeedbackController.java        # POST /api/feedback
@@ -116,6 +117,7 @@ src/main/java/com/example/kb/
 │   ├── StatsService.java              # 按天聚合反馈、盲区、入库趋势
 │   ├── ExportService.java             # 四类数据集拼 CSV/JSON/Markdown
 │   ├── QueryEmbeddingCache.java       # 问题向量 30 秒缓存，减少重复 embedding 调用
+│   ├── DocumentBatchService.java      # 单条/批量审批与批量删除的公共执行层
 │   └── MetadataKeys.java              # 块元数据键集中定义
 ├── common/                            # 跨层共用
 │   ├── Visibility.java                # 可见性 / 部门代号：all 或小写代号，入口统一校验

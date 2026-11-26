@@ -2,14 +2,11 @@ package com.example.kb.controller;
 
 import java.util.List;
 
-import com.example.kb.dto.DeleteDocumentResponse;
 import com.example.kb.dto.DocumentBatchDeleteRequest;
+import com.example.kb.dto.DocumentBatchReviewRequest;
 import com.example.kb.security.UserPrincipal;
-import com.example.kb.service.AuditService;
-import com.example.kb.service.DocumentBlobService;
+import com.example.kb.service.DocumentBatchService;
 import com.example.kb.service.DocumentManageService;
-import com.example.kb.service.KnowledgeEntryService;
-import com.example.kb.service.NotificationService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -23,33 +20,26 @@ import org.springframework.web.server.ResponseStatusException;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-/** 文档批量删除：去重、逐条删除与审计、空列表校验；用 mock 的 Service，不碰真实库。 */
+/** 文档批量接口：入参去重、权限预检、非法参数校验；执行逻辑交给 DocumentBatchService。 */
 @ExtendWith(MockitoExtension.class)
-class DocumentControllerTest {
+class DocumentBatchControllerTest {
 
+    @Mock
+    private DocumentBatchService documentBatchService;
     @Mock
     private DocumentManageService documentManageService;
-    @Mock
-    private AuditService auditService;
-    @Mock
-    private NotificationService notificationService;
-    @Mock
-    private KnowledgeEntryService knowledgeEntryService;
-    @Mock
-    private DocumentBlobService documentBlobService;
 
-    private DocumentController controller;
+    private DocumentBatchController controller;
 
     @BeforeEach
     void setUp() {
-        controller = new DocumentController(documentManageService, auditService, notificationService,
-                knowledgeEntryService, documentBlobService);
+        controller = new DocumentBatchController(documentBatchService, documentManageService);
         UserPrincipal user = new UserPrincipal("admin", "ADMIN", null);
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(user, null, List.of()));
@@ -61,21 +51,17 @@ class DocumentControllerTest {
     }
 
     @Test
-    void batchDeleteDeduplicatesAndDeletes() {
+    void batchDeleteDeduplicatesBeforeCallingService() {
         when(documentManageService.getVisibility(anyString())).thenReturn("all");
-        DeleteDocumentResponse response = new DeleteDocumentResponse();
-        response.setDeleted(true);
-        response.setDeletedChunks(3);
-        when(documentManageService.deleteDocument(anyString())).thenReturn(response);
+        when(documentBatchService.delete(any(), any())).thenReturn(
+                java.util.Map.of("requested", 2, "deleted", List.of("a.txt", "b.txt"), "failed", List.of()));
         DocumentBatchDeleteRequest request = new DocumentBatchDeleteRequest();
         request.setSources(List.of("a.txt", "b.txt", "a.txt"));
 
         java.util.Map<String, Object> result = controller.batchDelete(request);
 
         assertEquals(2, result.get("requested"));
-        assertEquals(List.of("a.txt", "b.txt"), result.get("deleted"));
-        verify(documentManageService, times(2)).deleteDocument(anyString());
-        verify(auditService, times(2)).record(anyString(), eq("DELETE_DOC"), anyString(), anyString());
+        verify(documentBatchService).delete(eq(List.of("a.txt", "b.txt")), any());
     }
 
     @Test
@@ -85,5 +71,30 @@ class DocumentControllerTest {
 
         ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> controller.batchDelete(request));
         assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
+    }
+
+    @Test
+    void batchReviewRejectsUnknownStatus() {
+        DocumentBatchReviewRequest request = new DocumentBatchReviewRequest();
+        request.setSources(List.of("a.txt"));
+        request.setStatus("draft");
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> controller.batchReview(request));
+        assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
+    }
+
+    @Test
+    void batchReviewPassesStatusAndReasonToService() {
+        when(documentManageService.getVisibility(anyString())).thenReturn("all");
+        when(documentBatchService.review(any(), anyString(), anyString(), any())).thenReturn(
+                java.util.Map.of("requested", 1, "reviewed", List.of("a.txt"), "failed", List.of()));
+        DocumentBatchReviewRequest request = new DocumentBatchReviewRequest();
+        request.setSources(List.of("a.txt"));
+        request.setStatus("rejected");
+        request.setReason("格式不符");
+
+        controller.batchReview(request);
+
+        verify(documentBatchService).review(eq(List.of("a.txt")), eq("rejected"), eq("格式不符"), any());
     }
 }
