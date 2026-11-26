@@ -19,6 +19,9 @@ final class MetadataKeys {
     static final String CHUNK_INDEX = "chunk_index";
     static final String CHUNK_TOTAL = "chunk_total";
     static final String SECTION = "section";
+    /** 知识条目的分类（单值）与标签（逗号分隔多值）：条目入库成功后回填到当前版块的元数据上 */
+    static final String CATEGORY = "category";
+    static final String TAGS = "tags";
 
     private MetadataKeys() {
     }

@@ -16,3 +16,6 @@ Thumbs.db
 
 # 本地环境变量文件，防止密钥误提交
 .env
+
+# ZCode 会话产物
+.zcode/

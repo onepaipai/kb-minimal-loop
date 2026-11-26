@@ -35,13 +35,13 @@ curl -X POST http://localhost:8080/api/auth/logout -H "Content-Type: application
 - 登录加固：连续 5 次密码错误锁定账号 15 分钟；开了双因素的账号登录时多传 `totpCode`（6 位动态验证码，见 [双因素](#双因素认证totp)）；密码策略：至少 10 位且同时含字母和数字。
 - 限流走数据库（多实例共用）：已登录用户每分钟 120 次，未登录按 IP 每分钟 30 次，超了返回 429。
 - 企业登录（OIDC）：见 [部署](deployment.md) 配好 IdP 后，登录页出现“企业账号登录”按钮；点它跳去 IdP 登录，回来自动进应用。首次登录自动建一个 USER 账号，管理员用 `PUT /api/admin/users/{username}` 调它的角色和部门。相关接口：`GET /api/auth/oidc/enabled`（查是否开启）、`POST /api/auth/oidc/exchange`（凭回调的一次性码换 Token，5 分钟有效、用过即废）。
-- 对外 API Key：给别的系统调数据接口用，不用账号密码登录。请求头带 `X-API-Key: kb_...` 即可（不用再带 Bearer Token），权限就是 Key 创建者的角色；`/api/admin/**` 与 `/api/auth/**` 不认 Key，只能用 JWT。Key 在管理员的“API 密钥”页面创建，明文只显示一次。建 Key 时可限范围：`ask` 只能调问答与清单接口（`/api/ask`、`/api/ask-stream`、`GET /api/documents`、`GET /api/document/versions`），`all`（默认）除管理接口外都能调；可填有效期天数（1–3650，不填永不过期），过期后调任何接口都返回 401。
+- 对外 API Key：给别的系统调数据接口用，不用账号密码登录。请求头带 `X-API-Key: kb_...` 即可（不用再带 Bearer Token），权限就是 Key 创建者的角色；`/api/admin/**` 与 `/api/auth/**` 不认 Key，只能用 JWT。Key 在管理员的“API 密钥”页面创建，明文只显示一次。建 Key 时可限范围：`ask` 只能调问答与清单接口（`POST /api/ask`、`POST /api/ask-stream`、`POST /api/bot/ask`、`GET /api/documents`、`GET /api/document/versions`），`all`（默认）除管理接口外都能调；可填有效期天数（1–3650，不填永不过期），过期后调任何接口都返回 401。
 
 ## POST /api/ingest —— 上传文档入库
 
 ```bash
-curl -X POST http://localhost:8080/api/ingest -H "Authorization: Bearer $TOKEN" -F "file=@docs/请假制度.txt"
-curl -X POST http://localhost:8080/api/ingest -H "Authorization: Bearer $TOKEN" -F "file=@docs/产品手册.pdf"
+curl -X POST http://localhost:8080/api/ingest -H "Authorization: Bearer $TOKEN" -F "file=@docs/samples/请假制度.txt"
+# 换成任意要入库的文件，如 -F "file=@/path/to/产品手册.pdf"
 ```
 
 支持后缀（不区分大小写）：`.txt` 直读 UTF-8；`.pdf/.doc/.docx/.md` 走 Tika 解析；`.java` 走代码知识库链路（见 [架构](architecture.md)）。其他后缀返回 400。普通用户（USER）不能上传，报 403。
@@ -59,7 +59,7 @@ curl -X POST http://localhost:8080/api/ingest -H "Authorization: Bearer $TOKEN" 
 ## POST /api/ingest-async —— 异步上传文档入库
 
 ```bash
-curl -X POST http://localhost:8080/api/ingest-async -H "Authorization: Bearer $TOKEN" -F "file=@docs/产品手册.pdf"
+curl -X POST http://localhost:8080/api/ingest-async -H "Authorization: Bearer $TOKEN" -F "file=@/path/to/任意文档.pdf"
 # 返回 202 {"id":"...","source":"产品手册.pdf","username":"admin","visibility":"all","status":"PENDING","chunks":0,"error":null,"createdAt":"..."}
 ```
 
@@ -286,7 +286,98 @@ curl -X DELETE http://localhost:8080/api/admin/api-keys/<id> -H "Authorization: 
 # 返回 {"id":"...","revoked":true}
 ```
 
-Key 归创建者所有，权限就是创建者的角色；库里只存 SHA-256 哈希。调数据接口时请求头带 `X-API-Key: kb_...`（见[鉴权](#鉴权除登录外所有接口都要带-token)），`/api/admin/**` 与 `/api/auth/**` 不认 Key。范围 `ask` 的 Key 只能调问答与清单接口，调入库、删除、审批等返回 401；过了有效期的 Key 调任何接口都返回 401。
+Key 归创建者所有，权限就是创建者的角色；库里只存 SHA-256 哈希。调数据接口时请求头带 `X-API-Key: kb_...`（见[鉴权](#鉴权除登录外所有接口都要带-token)），`/api/admin/**` 与 `/api/auth/**` 不认 Key。范围 `ask` 的 Key 只能调问答、机器人问答与清单接口，调入库、删除、审批等返回 401；过了有效期的 Key 调任何接口都返回 401。
+
+## POST /api/bot/ask —— 机器人问答（API Key 或 Token）
+
+给企业微信/钉钉机器人或外部系统对接；鉴权走请求头 `X-API-Key: kb_...`（范围 `ask` 即可）或 Bearer Token。接口与 `/api/ask` 共用同一套检索、标准答案优先与盲区记录，部门权限按 Key 主人（或登录用户）的规则算。IM 平台的回调地址、加解密与验签在企业 IM 管理后台配置后转发到本接口，代码不含这些配置。
+
+入参兼容两种消息体，二选一：通用 `{"question":"..."}`，或钉钉/企微文本消息 `{"msgtype":"text","text":{"content":"..."}}`。`platform` 可选，传 `dingtalk` / `wecom` 时按 IM 回复格式返回，否则返回通用出参。
+
+```bash
+# 通用入参 + 通用出参
+curl -X POST http://localhost:8080/api/bot/ask -H "X-API-Key: kb_xxx" -H "Content-Type: application/json" \
+  -d '{"question":"请假超过3天找谁批？"}'
+# 返回 {"answer":"……[1]","sources":["请假制度.txt"]}
+
+# 钉钉/企微入参 + IM 出参
+curl -X POST http://localhost:8080/api/bot/ask -H "X-API-Key: kb_xxx" -H "Content-Type: application/json" \
+  -d '{"platform":"wecom","msgtype":"text","text":{"content":"请假超过3天找谁批？"}}'
+# 返回 {"msgtype":"text","text":{"content":"……[1]"}}
+```
+
+`platform` 大小写与首尾空格不敏感；两种消息体都没有问题文本时返回 400“question 不能为空”。
+
+## 标准答案（置顶 FAQ，仅 ADMIN / DEPT_ADMIN）
+
+标准答案是管理员维护的权威答案：命中后问答直接返回，不走检索。匹配规则见 [架构](architecture.md)：问题原文一致（忽略大小写），或问题里包含任一关键词（逗号分隔，忽略大小写）。管理员管全部，部门管理员只管本部门的（`all` 全员的归管理员），普通用户不能调用（403）。
+
+```bash
+# 新建：question 1-200 字必填，answer 1-5000 字必填，keywords 可选最长 200 字，department 留空为 all
+curl -X POST http://localhost:8080/api/faq -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"question":"请假超过3天找谁批？","answer":"部门经理+HR 共同审批","keywords":"请假,审批","department":"all"}'
+# 返回 {"id":"...","question":"...","answer":"...","keywords":"...","department":"all","enabled":true,"createdAt":"...","updatedAt":"..."}
+
+# 清单：管理员看全部，部门管理员只看本部门
+curl http://localhost:8080/api/faq -H "Authorization: Bearer $TOKEN"
+
+# 修改：answer/keywords/department/enabled 中不传的字段不更新；标题不可改
+curl -X PUT http://localhost:8080/api/faq/{id} -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"answer":"新的权威答案","enabled":false}'
+
+# 删除
+curl -X DELETE http://localhost:8080/api/faq/{id} -H "Authorization: Bearer $TOKEN"
+# 返回 {"deleted":true}
+```
+
+部门管理员建/改条目时生效部门强制为本部门，传别的部门报 403；改、删别人的条目报 403。新建、修改、删除都会记审计日志。
+
+## 知识条目（在线撰写入库）
+
+在线写正文直接入库，不必做成文件上传。正文原文存在 `knowledge_entry` 表供编辑回填，同时复用文件上传的同名替换管线切块向量化（块元数据 `source` 为标题 + `.md`）；审批状态、版本号、可见性与部门权限规则与文件上传完全一致。写权限同上传：普通用户不能写（403），编辑写的待审批，管理员/部门管理员直接发布。
+
+```bash
+# 新建：title、content 必填；category、tags、visibility 可选
+curl -X POST http://localhost:8080/api/knowledge -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"title":"项目报销指引","content":"高铁二等座实报实销……","category":"财务","tags":"报销,差旅","visibility":"all"}'
+# 返回 {"id":"...","title":"...","source":"项目报销指引.md","chunks":3,"visibility":"all","status":"approved"}
+
+# 清单：department 可选（管理员用）；status 可选 pending/approved/rejected；非管理视角只看已发布的（本人写的待审批也能看到）
+curl "http://localhost:8080/api/knowledge?department=hr&status=approved" -H "Authorization: Bearer $TOKEN"
+# 返回 [{"id":"...","title":"...","source":"...","category":"...","tags":"...","visibility":"all","status":"approved","username":"...","createdAt":"...","updatedAt":"..."}]
+
+# 详情（含正文，编辑回填用）；不可见的人按 404 处理
+curl http://localhost:8080/api/knowledge/{id} -H "Authorization: Bearer $TOKEN"
+
+# 更新并重新入库：content/category/tags/visibility 不传的沿用原值，标题不可改
+curl -X PUT http://localhost:8080/api/knowledge/{id} -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"content":"新的正文……","visibility":"hr"}'
+
+# 删除：条目与所有版本的块一起删
+curl -X DELETE http://localhost:8080/api/knowledge/{id} -H "Authorization: Bearer $TOKEN"
+# 返回 {"deleted":true}
+```
+
+`status` 传 `pending`、`approved`、`rejected` 之外的值报 400；`department`、`visibility` 只允许小写字母、数字、下划线、中划线。
+
+## 会话历史（/api/sessions）
+
+问答消息落库保存，与喂模型用的短期记忆（24 小时清理）相互独立，长期保留，支持跨设备同步。只查自己的会话，别人的会话按空列表处理。前端已接入，正常用页面即可；下面接口供排查与对接：
+
+```bash
+# 我的会话清单：最近更新在前，上限 100 个
+curl http://localhost:8080/api/sessions -H "Authorization: Bearer $TOKEN"
+# 返回 [{"id":"...","title":"...","updatedAt":"..."}]
+
+# 某个会话的消息回放：时间正序；role 为 user/assistant，refs 为引用列表
+curl http://localhost:8080/api/sessions/{sessionId}/messages -H "Authorization: Bearer $TOKEN"
+# 返回 [{"role":"user","content":"请假超过3天找谁批？","refs":null,"createdAt":"..."},
+#       {"role":"assistant","content":"……[1]","refs":[...],"createdAt":"..."}]
+
+# 删除会话与它的全部消息
+curl -X DELETE http://localhost:8080/api/sessions/{sessionId} -H "Authorization: Bearer $TOKEN"
+# 返回 {"deleted":true}
+```
 
 ## 健康检查
 

@@ -15,6 +15,7 @@ import com.example.kb.service.CodeIngestService;
 import com.example.kb.service.DepartmentService;
 import com.example.kb.service.IngestJobStore;
 import com.example.kb.service.IngestService;
+import com.example.kb.service.KnowledgeEntryService;
 import com.example.kb.service.NotificationService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -44,11 +45,12 @@ public class IngestController {
     private final AsyncIngestService asyncIngestService;
     private final IngestJobStore jobStore;
     private final NotificationService notificationService;
+    private final KnowledgeEntryService knowledgeEntryService;
 
     public IngestController(IngestService ingestService, CodeIngestService codeIngestService,
                             DepartmentService departmentService, AuditService auditService,
                             AsyncIngestService asyncIngestService, IngestJobStore jobStore,
-                            NotificationService notificationService) {
+                            NotificationService notificationService, KnowledgeEntryService knowledgeEntryService) {
         this.ingestService = ingestService;
         this.codeIngestService = codeIngestService;
         this.departmentService = departmentService;
@@ -56,6 +58,7 @@ public class IngestController {
         this.asyncIngestService = asyncIngestService;
         this.jobStore = jobStore;
         this.notificationService = notificationService;
+        this.knowledgeEntryService = knowledgeEntryService;
     }
 
     /** 上传文档并切块入库，支持 .txt/.pdf/.doc/.docx/.md/.java/.xls/.xlsx/.ppt/.pptx；visibility 可选，不传默认全员可见。 */
@@ -123,6 +126,10 @@ public class IngestController {
         if (SUPPORTED_SUFFIXES.stream().noneMatch(lowerName::endsWith)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
                     "仅支持 .txt/.pdf/.doc/.docx/.md/.java/.xls/.xlsx/.ppt/.pptx 文件");
+        }
+        if (knowledgeEntryService.existsBySource(fileName)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "同名知识条目已存在，同名替换会顶掉它的检索块；请改文件名或先删除该条目");
         }
         return new UploadPrep(user, fileName, lowerName, effectiveVisibility, status);
     }

@@ -1,8 +1,8 @@
 package com.example.kb.service;
 
 import java.util.ArrayList;
-import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import com.example.kb.common.Visibility;
@@ -12,7 +12,6 @@ import com.example.kb.dto.ReferenceHit;
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.message.AiMessage;
 import dev.langchain4j.data.message.ChatMessage;
-import dev.langchain4j.data.message.SystemMessage;
 import dev.langchain4j.data.message.UserMessage;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.memory.ChatMemory;
@@ -36,15 +35,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class RagService {
 
-    /** 系统提示词写死：只按本轮资料作答，历史对话仅用于理解指代，回答带 [1][2] 引用 */
-    private static final String SYSTEM_PROMPT =
-            "你是企业知识库问答助手。你只能根据本轮提供的资料回答问题；"
-                    + "对话历史仅用于理解当前问题中的指代，历史回答不得作为答案来源；"
-                    + "如果本轮资料里没有相关内容，必须回答“资料里没找到”，不要编造任何信息。"
-                    + "回答时必须在对应内容后面标注引用编号，格式如 [1][2]。";
-
-    private static final int MAX_RESULTS = 5;
-    private static final double MIN_SCORE = 0.55;
     /** 每个会话最多保留的对话消息条数（约 10 轮） */
     private static final int MAX_MEMORY_MESSAGES = 20;
     /** 检索无命中时的固定回答：不调模型，保证每次都一样，也不给模型编造的机会 */
@@ -63,16 +53,23 @@ public class RagService {
     private final StreamingChatModel streamingChatModel;
     private final ChatMemoryStore chatMemoryStore;
     private final HybridSearchService hybridSearchService;
+    private final FaqService faqService;
+    private final QuestionMissService questionMissService;
+    private final ChatSessionService chatSessionService;
 
     public RagService(EmbeddingModel embeddingModel, EmbeddingStore<TextSegment> embeddingStore,
                       ChatModel chatModel, StreamingChatModel streamingChatModel, ChatMemoryStore chatMemoryStore,
-                      HybridSearchService hybridSearchService) {
+                      HybridSearchService hybridSearchService, FaqService faqService,
+                      QuestionMissService questionMissService, ChatSessionService chatSessionService) {
         this.embeddingModel = embeddingModel;
         this.embeddingStore = embeddingStore;
         this.chatModel = chatModel;
         this.streamingChatModel = streamingChatModel;
         this.chatMemoryStore = chatMemoryStore;
         this.hybridSearchService = hybridSearchService;
+        this.faqService = faqService;
+        this.questionMissService = questionMissService;
+        this.chatSessionService = chatSessionService;
     }
 
     /** 流式问答的事件回调：Controller 接到 SseEmitter 上，顺序为 sources → token* → done / onError。 */
@@ -83,27 +80,36 @@ public class RagService {
         void onError(Throwable error);
     }
 
-    /** ask() 与 askStream() 共用的准备结果：拼好的消息列表、会话记忆（无 sessionId 时为 null）、引用。 */
+    /**
+     * ask() 与 askStream() 共用的准备结果：拼好的消息列表、会话记忆（无 sessionId 时为 null）、引用。
+     * standardAnswer 非 null 表示命中了标准答案：messages 为 null，不检索不调模型，直接返回标准答案。
+     */
     private record PreparedAsk(List<ChatMessage> messages, ChatMemory chatMemory,
-                               List<ReferenceHit> hits, List<String> sources) {
+                               List<ReferenceHit> hits, List<String> sources, String standardAnswer) {
     }
 
     /**
      * 检索并回答：把检索到的块拼成带编号的资料段连同问题一起发给模型。
-     * 无命中时不调模型，直接回“资料里没找到”；有命中时先删超出引用范围的编号，再校验每个引用有没有文本依据。
+     * 命中标准答案时不检索不调模型，直接返回；无命中时不调模型，直接回“资料里没找到”；
+     * 有命中时先删超出引用范围的编号，再校验每个引用有没有文本依据。
      */
     public AskResponse ask(AskRequest request, AskScope scope) {
         PreparedAsk prepared = prepare(request, scope);
         String answer;
-        if (prepared.hits().isEmpty()) {
+        if (prepared.standardAnswer() != null) {
+            answer = prepared.standardAnswer();
+        } else if (prepared.hits().isEmpty()) {
             answer = NOT_FOUND_ANSWER;
         } else {
             answer = CitationValidator.validate(
                     sanitizeCitations(chatModel.chat(prepared.messages()).aiMessage().text(),
                             prepared.hits().size()),
-                    chunkTexts(prepared.hits()));
+                    RagAnswerHelper.chunkTexts(prepared.hits()));
         }
         saveMemory(prepared, request.getQuestion(), answer);
+        recordMissIfNeeded(answer, scope, request.getQuestion());
+        chatSessionService.append(scope.username(), request.getSessionId(), scope.department(),
+                request.getQuestion(), answer, prepared.hits());
 
         AskResponse response = new AskResponse();
         response.setAnswer(answer);
@@ -114,32 +120,32 @@ public class RagService {
 
     /** 删掉答案里超出本次引用范围的编号（如只有 3 块却写了 [9]），防止模型编造引用；范围内的不动。 */
     static String sanitizeCitations(String answer, int hitCount) {
-        if (answer == null) {
-            return null;
-        }
-        java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("\\[(\\d+)\\]").matcher(answer);
-        StringBuffer result = new StringBuffer();
-        while (matcher.find()) {
-            int n = Integer.parseInt(matcher.group(1));
-            String replacement = n >= 1 && n <= hitCount ? matcher.group(0) : "";
-            matcher.appendReplacement(result, java.util.regex.Matcher.quoteReplacement(replacement));
-        }
-        matcher.appendTail(result);
-        return result.toString();
+        return RagAnswerHelper.sanitizeCitations(answer, hitCount);
     }
 
     /**
      * 流式检索问答：先发一次引用来源，再逐 token 发答案，最后发完成；出错走 onError。
      * 多轮记忆只在完整答案拿到后存一次，绝不在每个 token 到达时存。
-     * 无命中时直接发固定回答，不调模型；流式 token 边收边过引用过滤器，超范围的 [n] 发出去之前就删掉，
-     * 存进记忆的是同一份过滤后的文本（文本依据校验仍只对完整答案做，见 onCompleteResponse）。
+     * 命中标准答案或无命中时直接发整段回答，不调模型；流式 token 边收边过引用过滤器，
+     * 超范围的 [n] 发出去之前就删掉，存进记忆与会话历史的是同一份过滤后并校验过的文本。
      */
     public void askStream(AskRequest request, AskScope scope, StreamListener listener) {
         PreparedAsk prepared = prepare(request, scope);
         listener.onSources(prepared.hits());
+        if (prepared.standardAnswer() != null) {
+            listener.onToken(prepared.standardAnswer());
+            saveMemory(prepared, request.getQuestion(), prepared.standardAnswer());
+            chatSessionService.append(scope.username(), request.getSessionId(), scope.department(),
+                    request.getQuestion(), prepared.standardAnswer(), prepared.hits());
+            listener.onComplete();
+            return;
+        }
         if (prepared.hits().isEmpty()) {
             listener.onToken(NOT_FOUND_ANSWER);
             saveMemory(prepared, request.getQuestion(), NOT_FOUND_ANSWER);
+            recordMissIfNeeded(NOT_FOUND_ANSWER, scope, request.getQuestion());
+            chatSessionService.append(scope.username(), request.getSessionId(), scope.department(),
+                    request.getQuestion(), NOT_FOUND_ANSWER, prepared.hits());
             listener.onComplete();
             return;
         }
@@ -169,8 +175,12 @@ public class RagService {
                     answer = citationFilter.feed(completeResponse.aiMessage().text())
                             + citationFilter.flush();
                 }
-                saveMemory(prepared, request.getQuestion(), CitationValidator.validate(
-                        sanitizeCitations(answer, prepared.hits().size()), chunkTexts(prepared.hits())));
+                String finalAnswer = CitationValidator.validate(
+                        sanitizeCitations(answer, prepared.hits().size()), RagAnswerHelper.chunkTexts(prepared.hits()));
+                saveMemory(prepared, request.getQuestion(), finalAnswer);
+                recordMissIfNeeded(finalAnswer, scope, request.getQuestion());
+                chatSessionService.append(scope.username(), request.getSessionId(), scope.department(),
+                        request.getQuestion(), finalAnswer, prepared.hits());
                 listener.onComplete();
             }
 
@@ -182,15 +192,29 @@ public class RagService {
     }
 
     /**
-     * 共用准备：问题向量化 → 检索 → 拼带编号的资料段与问题 → 取会话历史，拼成发给模型的消息列表。
+     * 共用准备：先匹配标准答案（命中即短路，不检索不调模型）；未命中再走
+     * 问题向量化 → 检索 → 拼带编号的资料段与问题 → 取会话历史，拼成发给模型的消息列表。
      */
     private PreparedAsk prepare(AskRequest request, AskScope scope) {
+        Optional<FaqService.FaqEntry> standard = faqService.match(request.getQuestion(), scope.department());
+        if (standard.isPresent()) {
+            ReferenceHit hit = new ReferenceHit();
+            hit.setIndex(1);
+            hit.setScore(1.0);
+            hit.setSource("标准答案");
+            hit.setText(standard.get().answer());
+            List<ReferenceHit> hits = new ArrayList<>();
+            hits.add(hit);
+            List<String> sources = new ArrayList<>();
+            sources.add("标准答案");
+            return new PreparedAsk(null, buildChatMemory(request, scope), hits, sources, standard.get().answer());
+        }
         Response<Embedding> embeddingResponse = embeddingModel.embed(request.getQuestion());
-        int maxResults = MAX_RESULTS;
+        int maxResults = RagPromptBuilder.MAX_RESULTS;
         if (request.getMaxResults() != null) {
             maxResults = request.getMaxResults();
         }
-        double minScore = MIN_SCORE;
+        double minScore = RagPromptBuilder.MIN_SCORE;
         if (request.getMinScore() != null) {
             minScore = request.getMinScore();
         }
@@ -209,51 +233,40 @@ public class RagService {
                 embeddingResponse.content(), filter, request.getQuestion(), department,
                 request.getSources(), maxResults, minScore);
 
-        Set<String> distinctSources = new LinkedHashSet<>();
-        List<ReferenceHit> hits = new ArrayList<>();
-        StringBuilder contextBuilder = new StringBuilder();
-        for (int i = 0; i < chunks.size(); i++) {
-            HybridSearchService.RetrievedChunk chunk = chunks.get(i);
-            contextBuilder.append("[").append(i + 1).append("] ").append(chunk.text()).append("\n\n");
-            distinctSources.add(chunk.source());
-            ReferenceHit hit = new ReferenceHit();
-            hit.setIndex(i + 1);
-            hit.setScore(chunk.score());
-            hit.setSource(chunk.source());
-            hit.setText(chunk.text());
-            hits.add(hit);
-        }
-        String prompt = "资料：\n" + contextBuilder + "问题：" + request.getQuestion();
-
-        ChatMemory chatMemory = null;
-        if (request.getSessionId() != null && !request.getSessionId().isBlank()) {
-            // 会话键带用户名 + 部门：不同用户、不同部门各用各的历史；历史存在 chat_memory 表里，重启不丢，24 小时未更新由定时任务清理
-            String memoryKey = scope.username() + "|" + request.getSessionId() + "|"
-                    + (scope.department() == null ? "all-only" : scope.department());
-            chatMemory = MessageWindowChatMemory.builder()
-                    .id(memoryKey)
-                    .maxMessages(MAX_MEMORY_MESSAGES)
-                    .chatMemoryStore(chatMemoryStore)
-                    .build();
-        }
-        List<ChatMessage> messages = new ArrayList<>();
-        String systemPrompt = SYSTEM_PROMPT;
-        if (!chunks.isEmpty()) {
-            // 引用编号范围写死在提示词里：本次几块资料就只能引用 [1] 到 [N]，模型编不出 [N+1]
-            systemPrompt += "本次共提供 " + chunks.size() + " 块资料，引用编号只能是 [1] 到 [" + chunks.size()
-                    + "]，不许编造编号；每句有事实内容的回答都要带引用。";
-        }
-        messages.add(SystemMessage.from(systemPrompt));
+        RagPromptParts promptParts = new RagPromptBuilder().build(chunks, request.getQuestion());
+        ChatMemory chatMemory = buildChatMemory(request, scope);
+        List<ChatMessage> messages = promptParts.messages();
         if (chatMemory != null) {
-            messages.addAll(chatMemory.messages());
+            messages.addAll(1, chatMemory.messages());
         }
-        messages.add(UserMessage.from(prompt));
-        return new PreparedAsk(messages, chatMemory, hits, new ArrayList<>(distinctSources));
+        return new PreparedAsk(messages, chatMemory, promptParts.hits(), promptParts.sources(), null);
     }
 
-    /** 引用校验用的块文本（按引用编号顺序）：第 n 块对应 [n]。 */
-    private static List<String> chunkTexts(List<ReferenceHit> hits) {
-        return hits.stream().map(ReferenceHit::getText).toList();
+    /**
+     * 会话记忆：sessionId 传入时按 用户名|sessionId|部门 组键取历史。
+     * 会话键带用户名 + 部门：不同用户、不同部门各用各的历史；历史存在 chat_memory 表里，重启不丢，
+     * 24 小时未更新由定时任务清理。标准答案路径与检索路径共用。
+     */
+    private ChatMemory buildChatMemory(AskRequest request, AskScope scope) {
+        if (request.getSessionId() == null || request.getSessionId().isBlank()) {
+            return null;
+        }
+        String memoryKey = scope.username() + "|" + request.getSessionId() + "|all-only";
+        if (scope.department() != null) {
+            memoryKey = scope.username() + "|" + request.getSessionId() + "|" + scope.department();
+        }
+        return MessageWindowChatMemory.builder()
+                .id(memoryKey)
+                .maxMessages(MAX_MEMORY_MESSAGES)
+                .chatMemoryStore(chatMemoryStore)
+                .build();
+    }
+
+    /** 答案是“资料里没找到”就记一条知识盲区（检索无命中或模型明确说没有都算），记录失败在 service 内部吞掉。 */
+    private void recordMissIfNeeded(String answer, AskScope scope, String question) {
+        if (NOT_FOUND_ANSWER.equals(answer)) {
+            questionMissService.record(scope.username(), scope.department(), question);
+        }
     }
 
     /** 历史里只存问答原文，不含本轮资料段，避免上下文重复膨胀。 */

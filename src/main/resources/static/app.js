@@ -6,9 +6,7 @@
 const TOKEN_KEY = 'kb.token';
 const REFRESH_KEY = 'kb.refreshToken';
 const USER_KEY = 'kb.user';
-const SESSIONS_KEY = 'kb.sessions';
 const DOCS_PAGE_SIZE = 20;
-const MAX_STORED_MESSAGES = 100;
 
 const $ = (id) => document.getElementById(id);
 const messageEl = $('message');
@@ -19,6 +17,11 @@ let auditPage = 0;
 let notifPage = 0;
 let asking = false;
 let currentSessionId = null;
+/* 会话与消息缓存在内存里，唯一事实来源是服务端（跨设备同步） */
+let cachedSessions = [];
+let cachedMessages = [];
+let editingEntryId = null;
+let editingFaqId = null;
 
 function showMessage(text) {
     messageEl.textContent = text;
@@ -47,7 +50,12 @@ async function api(path, { method = 'GET', body = null, isForm = false } = {}) {
         }
         throw new Error(detail);
     }
-    return response.json();
+    // 成功响应可能是空体（无内容端点），直接 json() 会抛语法错
+    const text = await response.text();
+    if (!text) {
+        return null;
+    }
+    return JSON.parse(text);
 }
 
 function doApi(path, method, body, isForm) {
@@ -95,7 +103,7 @@ function saveSession(login) {
     currentUser = login;
 }
 
-/** clearChat 只在主动点退出时清本地对话记录；Token 过期回登录页时保留。 */
+/** clearChat 只在主动点退出时清本页的会话缓存；服务端历史保留，重新登录还能看到。 */
 function logout(message, clearChat = false) {
     const refreshToken = localStorage.getItem(REFRESH_KEY);
     if (refreshToken) {
@@ -109,9 +117,8 @@ function logout(message, clearChat = false) {
     localStorage.removeItem(REFRESH_KEY);
     localStorage.removeItem(USER_KEY);
     if (clearChat) {
-        const sessions = loadSessions();
-        sessions.forEach((s) => localStorage.removeItem(messagesKey(s.id)));
-        localStorage.removeItem(SESSIONS_KEY);
+        cachedSessions = [];
+        cachedMessages = [];
         currentSessionId = null;
     }
     currentUser = null;
@@ -134,6 +141,9 @@ function showApp() {
     }
     $('adminNavBtn').hidden = !(currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN');
     $('approvalNavBtn').hidden = !(currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN');
+    $('entriesNavBtn').hidden = currentUser.role === 'USER';
+    $('faqNavBtn').hidden = !(currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN');
+    $('missNavBtn').hidden = !(currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN');
     $('deptNavBtn').hidden = currentUser.role !== 'ADMIN';
     $('auditNavBtn').hidden = currentUser.role !== 'ADMIN';
     $('apikeysNavBtn').hidden = currentUser.role !== 'ADMIN';
@@ -204,76 +214,101 @@ async function loadDashboard() {
     }
 }
 
-/* ---------------- 会话（只存本浏览器） ---------------- */
-
-function messagesKey(sessionId) {
-    return 'kb.messages.' + sessionId;
-}
-
-function loadSessions() {
-    try {
-        return JSON.parse(localStorage.getItem(SESSIONS_KEY) || '[]');
-    } catch (e) {
-        return [];
-    }
-}
-
-function saveSessions(sessions) {
-    localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
-}
+/* ---------------- 会话（服务端保存，跨设备同步） ---------------- */
 
 function newSessionId() {
     return 'web-' + Math.random().toString(36).slice(2, 10);
 }
 
-function createSession() {
-    const sessions = loadSessions();
-    const session = { id: newSessionId(), title: '新对话', updatedAt: Date.now() };
-    sessions.unshift(session);
-    saveSessions(sessions);
-    return session;
+/** 从服务端拉会话清单；当前会话不在清单里时自动切到最近更新的那个。 */
+async function refreshSessionList() {
+    try {
+        cachedSessions = await api('/api/sessions');
+    } catch (e) {
+        showMessage(e.message);
+        return;
+    }
+    const currentExists = cachedSessions.some((s) => s.id === currentSessionId);
+    if (cachedSessions.length > 0 && !currentExists) {
+        await openSession(cachedSessions[0].id);
+        return;
+    }
+    renderSessionList();
 }
 
-function ensureSession() {
-    const sessions = loadSessions();
-    if (sessions.length === 0) {
-        currentSessionId = createSession().id;
-    } else {
-        currentSessionId = sessions[0].id;
+/** 打开某个会话：从服务端拉消息并渲染。 */
+async function openSession(sessionId) {
+    currentSessionId = sessionId;
+    try {
+        cachedMessages = mapServerMessages(await api('/api/sessions/' + encodeURIComponent(sessionId) + '/messages'));
+    } catch (e) {
+        cachedMessages = [];
+        showMessage(e.message);
     }
     renderSessionList();
     renderMessages();
 }
 
-function switchSession(id) {
-    currentSessionId = id;
+/** 服务端消息转 UI 结构：assistant 消息带上追问定位用的 question（取它前面最近的用户消息）。 */
+function mapServerMessages(items) {
+    const messages = [];
+    let lastQuestion = '';
+    (items || []).forEach((item) => {
+        if (item.role === 'user') {
+            lastQuestion = item.content;
+            messages.push({ role: 'user', text: item.content });
+        } else {
+            messages.push({ role: 'assistant', text: item.content, hits: item.refs || [], question: lastQuestion });
+        }
+    });
+    return messages;
+}
+
+/** 进应用时调用：先渲染空态，服务端清单到了再刷新并选中最近的会话。 */
+function ensureSession() {
     renderSessionList();
     renderMessages();
+    refreshSessionList();
+}
+
+async function switchSession(id) {
+    await openSession(id);
     showView('chat');
 }
 
-function deleteSession(id, event) {
+async function deleteSession(id, event) {
     event.stopPropagation();
-    const sessions = loadSessions().filter((s) => s.id !== id);
-    saveSessions(sessions);
-    localStorage.removeItem(messagesKey(id));
+    try {
+        await api('/api/sessions/' + encodeURIComponent(id), { method: 'DELETE' });
+    } catch (e) {
+        showMessage(e.message);
+        return;
+    }
+    cachedSessions = cachedSessions.filter((s) => s.id !== id);
     if (currentSessionId === id) {
-        currentSessionId = sessions.length > 0 ? sessions[0].id : createSession().id;
+        cachedMessages = [];
+        if (cachedSessions.length > 0) {
+            await openSession(cachedSessions[0].id);
+        } else {
+            currentSessionId = newSessionId();
+            renderSessionList();
+            renderMessages();
+        }
+        return;
     }
     renderSessionList();
-    renderMessages();
 }
 
 function renderSessionList() {
     const list = $('sessionList');
     list.textContent = '';
-    loadSessions().forEach((session) => {
+    cachedSessions.forEach((session) => {
         const item = document.createElement('button');
         item.type = 'button';
         item.className = 'session-item' + (session.id === currentSessionId ? ' active' : '');
         const title = document.createElement('span');
         title.className = 'session-title';
-        title.textContent = session.title;
+        title.textContent = session.title || '新对话';
         const del = document.createElement('span');
         del.className = 'session-del';
         del.textContent = '×';
@@ -282,32 +317,6 @@ function renderSessionList() {
         item.addEventListener('click', () => switchSession(session.id));
         list.appendChild(item);
     });
-}
-
-function loadMessages(sessionId) {
-    try {
-        return JSON.parse(localStorage.getItem(messagesKey(sessionId)) || '[]');
-    } catch (e) {
-        return [];
-    }
-}
-
-function storeMessage(sessionId, message) {
-    const messages = loadMessages(sessionId);
-    messages.push(message);
-    localStorage.setItem(messagesKey(sessionId), JSON.stringify(messages.slice(-MAX_STORED_MESSAGES)));
-}
-
-/** 首问给会话起标题（只起一次）。 */
-function nameSessionIfUntitled(question) {
-    const sessions = loadSessions();
-    const session = sessions.find((s) => s.id === currentSessionId);
-    if (session && session.title === '新对话') {
-        session.title = question.length > 18 ? question.slice(0, 18) + '…' : question;
-        session.updatedAt = Date.now();
-        saveSessions(sessions);
-        renderSessionList();
-    }
 }
 
 /* ---------------- 消息气泡 ---------------- */
@@ -339,22 +348,30 @@ function messageElement(message) {
         feedback.className = 'feedback-row';
         const up = document.createElement('button');
         up.type = 'button';
-        up.className = 'btn btn-outline-secondary btn-sm';
+        up.className = 'btn btn-outline-secondary btn-sm fb-btn';
         up.textContent = '👍 有用';
         up.addEventListener('click', () => submitFeedback(wrap, up, true));
         const down = document.createElement('button');
         down.type = 'button';
-        down.className = 'btn btn-outline-secondary btn-sm';
+        down.className = 'btn btn-outline-secondary btn-sm fb-btn';
         down.textContent = '👎 没用';
         down.addEventListener('click', () => submitFeedback(wrap, down, false));
         feedback.append(up, down);
+        if (currentUser && (currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN')) {
+            const toFaq = document.createElement('button');
+            toFaq.type = 'button';
+            toFaq.className = 'btn btn-outline-secondary btn-sm';
+            toFaq.textContent = '转标准答案';
+            toFaq.addEventListener('click', () => prefillFaq(wrap.dataset.question || ''));
+            feedback.appendChild(toFaq);
+        }
         bubble.appendChild(feedback);
     }
     wrap.appendChild(bubble);
     return wrap;
 }
 
-/** 回答反馈：按原问答提交好评/差评，提交后两个按钮都禁用。 */
+/** 回答反馈：按原问答提交好评/差评，提交后禁用评分两个按钮（转标准答案保留可用）。 */
 async function submitFeedback(wrap, button, helpful) {
     const question = wrap.dataset.question || '';
     if (!question) {
@@ -363,7 +380,7 @@ async function submitFeedback(wrap, button, helpful) {
     const answer = wrap.querySelector('.msg-text').textContent;
     try {
         await api('/api/feedback', { method: 'POST', body: { question, answer, helpful } });
-        wrap.querySelectorAll('.feedback-row button').forEach((b) => { b.disabled = true; });
+        wrap.querySelectorAll('.feedback-row .fb-btn').forEach((b) => { b.disabled = true; });
         button.classList.add('btn-primary');
         button.classList.remove('btn-outline-secondary');
     } catch (e) {
@@ -374,15 +391,14 @@ async function submitFeedback(wrap, button, helpful) {
 function renderMessages() {
     const container = $('messages');
     container.textContent = '';
-    const messages = loadMessages(currentSessionId);
-    if (messages.length === 0) {
+    if (cachedMessages.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'chat-empty';
         empty.textContent = '在下面输入问题开始对话，回答会带资料来源引用。';
         container.appendChild(empty);
         return;
     }
-    messages.forEach((m) => container.appendChild(messageElement(m)));
+    cachedMessages.forEach((m) => container.appendChild(messageElement(m)));
     scrollMessagesToBottom();
 }
 
@@ -498,16 +514,19 @@ async function askStream(request, bubble) {
 
 /* ---------------- 视图切换 ---------------- */
 
-const VIEW_TITLES = { dashboard: '总览', chat: '智能问答', manage: '文档管理', notifications: '通知',
-    approval: '审批', departments: '部门管理', audit: '审计日志', admin: '用户管理',
-    apikeys: 'API 密钥', password: '改密码' };
+const VIEW_TITLES = { dashboard: '总览', chat: '智能问答', manage: '文档管理', entries: '知识条目',
+    faq: '标准答案', notifications: '通知', approval: '审批', miss: '知识盲区', departments: '部门管理',
+    audit: '审计日志', admin: '用户管理', apikeys: 'API 密钥', password: '改密码' };
 
 function showView(name) {
     $('dashboardView').hidden = name !== 'dashboard';
     $('chatView').hidden = name !== 'chat';
     $('manageView').hidden = name !== 'manage';
+    $('entriesView').hidden = name !== 'entries';
+    $('faqView').hidden = name !== 'faq';
     $('notificationsView').hidden = name !== 'notifications';
     $('approvalView').hidden = name !== 'approval';
+    $('missView').hidden = name !== 'miss';
     $('departmentsView').hidden = name !== 'departments';
     $('auditView').hidden = name !== 'audit';
     $('adminView').hidden = name !== 'admin';
@@ -524,6 +543,12 @@ function showView(name) {
         loadNotifications(notifPage);
     } else if (name === 'approval') {
         loadPending();
+    } else if (name === 'entries') {
+        loadEntries();
+    } else if (name === 'faq') {
+        loadFaqs();
+    } else if (name === 'miss') {
+        loadMissStats();
     } else if (name === 'departments') {
         loadDepartments();
     } else if (name === 'audit') {
@@ -879,6 +904,341 @@ async function loadAuditLogs(page) {
     }
 }
 
+/* ---------------- 知识条目（在线撰写） ---------------- */
+
+function statusText(status) {
+    if (status === 'pending') {
+        return '待审批';
+    }
+    if (status === 'rejected') {
+        return '已驳回';
+    }
+    return '已发布';
+}
+
+async function loadEntries() {
+    try {
+        const entries = await api('/api/knowledge');
+        $('entriesInfo').textContent = '共 ' + entries.length + ' 条';
+        const tbody = $('entriesTable').querySelector('tbody');
+        tbody.textContent = '';
+        (entries || []).forEach((entry) => {
+            const row = document.createElement('tr');
+            const title = document.createElement('td');
+            title.textContent = entry.title;
+            const category = document.createElement('td');
+            category.textContent = entry.category || '—';
+            const tags = document.createElement('td');
+            tags.textContent = entry.tags || '—';
+            const visibility = document.createElement('td');
+            visibility.textContent = entry.visibility;
+            const status = document.createElement('td');
+            status.textContent = statusText(entry.status);
+            const updated = document.createElement('td');
+            updated.textContent = entry.updatedAt ? entry.updatedAt.slice(0, 19).replace('T', ' ') : '—';
+            const action = document.createElement('td');
+            // 编辑/删除后端有权限校验（管理员全部、部门管理员本部门、本人可改自己的），无权限就不渲染按钮
+            const canManage = currentUser && (currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN'
+                || entry.username === currentUser.username);
+            if (canManage) {
+                const edit = document.createElement('button');
+                edit.type = 'button';
+                edit.className = 'btn btn-outline-secondary btn-sm';
+                edit.textContent = '编辑';
+                edit.addEventListener('click', () => editEntry(entry.id));
+                const del = document.createElement('button');
+                del.type = 'button';
+                del.className = 'btn btn-outline-danger btn-sm ms-1';
+                del.textContent = '删除';
+                del.addEventListener('click', () => deleteEntry(entry.id, entry.title));
+                action.append(edit, del);
+            }
+            row.append(title, category, tags, visibility, status, updated, action);
+            tbody.appendChild(row);
+        });
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+/** 点编辑：拉全文回填表单，标题锁定（标题即来源，改名等于新建）。 */
+async function editEntry(id) {
+    try {
+        const entry = await api('/api/knowledge/' + id);
+        editingEntryId = id;
+        $('entryTitle').value = entry.title;
+        $('entryTitle').disabled = true;
+        $('entryCategory').value = entry.category || '';
+        $('entryTags').value = entry.tags || '';
+        $('entryVisibility').value = entry.visibility || 'all';
+        $('entryContent').value = entry.content || '';
+        $('entrySubmitBtn').textContent = '保存修改';
+        $('entryCancelEditBtn').hidden = false;
+        showView('entries');
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+function resetEntryForm() {
+    editingEntryId = null;
+    $('entryForm').reset();
+    $('entryVisibility').value = 'all';
+    $('entryTitle').disabled = false;
+    $('entrySubmitBtn').textContent = '保存入库';
+    $('entryCancelEditBtn').hidden = true;
+}
+
+async function deleteEntry(id, title) {
+    if (!window.confirm('确定删除知识条目「' + title + '」吗？它的检索块会一起删除。')) {
+        return;
+    }
+    try {
+        await api('/api/knowledge/' + id, { method: 'DELETE' });
+        showMessage('已删除「' + title + '」');
+        loadEntries();
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+$('entryForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const body = {
+        title: $('entryTitle').value.trim(),
+        content: $('entryContent').value,
+        category: $('entryCategory').value.trim() || null,
+        tags: $('entryTags').value.trim() || null,
+        visibility: $('entryVisibility').value.trim() || 'all',
+    };
+    try {
+        let result;
+        if (editingEntryId) {
+            delete body.title;
+            result = await api('/api/knowledge/' + editingEntryId, { method: 'PUT', body });
+        } else {
+            result = await api('/api/knowledge', { method: 'POST', body });
+        }
+        showMessage('「' + result.title + '」已入库，' + result.chunks + ' 块，状态：' + statusText(result.status));
+        resetEntryForm();
+        loadEntries();
+    } catch (err) {
+        showMessage(err.message);
+    }
+});
+
+$('entryCancelEditBtn').addEventListener('click', resetEntryForm);
+$('refreshEntriesBtn').addEventListener('click', () => loadEntries());
+
+/* ---------------- 标准答案（置顶 FAQ） ---------------- */
+
+function faqStatusText(enabled) {
+    if (enabled) {
+        return '启用中';
+    }
+    return '已停用';
+}
+
+async function loadFaqs() {
+    try {
+        const faqs = await api('/api/faq');
+        $('faqInfo').textContent = '共 ' + faqs.length + ' 条';
+        const tbody = $('faqTable').querySelector('tbody');
+        tbody.textContent = '';
+        (faqs || []).forEach((faq) => {
+            const row = document.createElement('tr');
+            const question = document.createElement('td');
+            question.textContent = faq.question;
+            const keywords = document.createElement('td');
+            keywords.textContent = faq.keywords || '—';
+            const department = document.createElement('td');
+            department.textContent = faq.department;
+            const status = document.createElement('td');
+            status.textContent = faqStatusText(faq.enabled);
+            const updated = document.createElement('td');
+            updated.textContent = faq.updatedAt ? faq.updatedAt.slice(0, 19).replace('T', ' ') : '—';
+            const action = document.createElement('td');
+            const edit = document.createElement('button');
+            edit.type = 'button';
+            edit.className = 'btn btn-outline-secondary btn-sm';
+            edit.textContent = '编辑';
+            edit.addEventListener('click', () => editFaq(faq));
+            const toggle = document.createElement('button');
+            toggle.type = 'button';
+            toggle.className = 'btn btn-outline-secondary btn-sm ms-1';
+            if (faq.enabled) {
+                toggle.textContent = '停用';
+            } else {
+                toggle.textContent = '启用';
+            }
+            toggle.addEventListener('click', () => toggleFaq(faq));
+            const del = document.createElement('button');
+            del.type = 'button';
+            del.className = 'btn btn-outline-danger btn-sm ms-1';
+            del.textContent = '删除';
+            del.addEventListener('click', () => deleteFaq(faq.id, faq.question));
+            action.append(edit, toggle, del);
+            row.append(question, keywords, department, status, updated, action);
+            tbody.appendChild(row);
+        });
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+function editFaq(faq) {
+    editingFaqId = faq.id;
+    $('faqQuestion').value = faq.question;
+    $('faqQuestion').disabled = true;
+    $('faqKeywords').value = faq.keywords || '';
+    $('faqDepartment').value = faq.department || 'all';
+    $('faqEnabled').checked = faq.enabled;
+    $('faqAnswer').value = faq.answer || '';
+    $('faqSubmitBtn').textContent = '保存修改';
+    $('faqCancelEditBtn').hidden = false;
+    $('faqEnabledBox').hidden = false;
+}
+
+function resetFaqForm() {
+    editingFaqId = null;
+    $('faqForm').reset();
+    $('faqDepartment').value = 'all';
+    $('faqEnabled').checked = true;
+    $('faqQuestion').disabled = false;
+    $('faqSubmitBtn').textContent = '保存';
+    $('faqCancelEditBtn').hidden = true;
+    $('faqEnabledBox').hidden = true;
+}
+
+/** 把某个问题预填进标准答案表单（差评回答/盲区问题一键转入）。 */
+function prefillFaq(question) {
+    resetFaqForm();
+    $('faqQuestion').value = question;
+    showView('faq');
+}
+
+async function toggleFaq(faq) {
+    try {
+        await api('/api/faq/' + faq.id, { method: 'PUT', body: { enabled: !faq.enabled } });
+        if (faq.enabled) {
+            showMessage('「' + faq.question + '」已停用');
+        } else {
+            showMessage('「' + faq.question + '」已启用');
+        }
+        loadFaqs();
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+async function deleteFaq(id, question) {
+    if (!window.confirm('确定删除标准答案「' + question + '」吗？')) {
+        return;
+    }
+    try {
+        await api('/api/faq/' + id, { method: 'DELETE' });
+        showMessage('已删除「' + question + '」');
+        loadFaqs();
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+$('faqForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    try {
+        let result;
+        if (editingFaqId) {
+            result = await api('/api/faq/' + editingFaqId, {
+                method: 'PUT',
+                body: {
+                    answer: $('faqAnswer').value,
+                    keywords: $('faqKeywords').value.trim() || null,
+                    department: $('faqDepartment').value.trim() || 'all',
+                    enabled: $('faqEnabled').checked,
+                },
+            });
+        } else {
+            result = await api('/api/faq', {
+                method: 'POST',
+                body: {
+                    question: $('faqQuestion').value.trim(),
+                    answer: $('faqAnswer').value,
+                    keywords: $('faqKeywords').value.trim() || null,
+                    department: $('faqDepartment').value.trim() || 'all',
+                },
+            });
+        }
+        showMessage('标准答案「' + result.question + '」已保存');
+        resetFaqForm();
+        loadFaqs();
+    } catch (err) {
+        showMessage(err.message);
+    }
+});
+
+$('faqCancelEditBtn').addEventListener('click', resetFaqForm);
+$('refreshFaqBtn').addEventListener('click', () => loadFaqs());
+
+/* ---------------- 知识盲区看板 ---------------- */
+
+async function loadMissStats() {
+    try {
+        let query = '?limit=50';
+        const keyword = $('missKeyword').value.trim();
+        if (keyword) {
+            query += '&q=' + encodeURIComponent(keyword);
+        }
+        const stats = await api('/api/admin/miss-stats' + query);
+        const tbody = $('missTable').querySelector('tbody');
+        tbody.textContent = '';
+        (stats || []).forEach((stat) => {
+            const row = document.createElement('tr');
+            const question = document.createElement('td');
+            question.textContent = stat.question;
+            const count = document.createElement('td');
+            count.textContent = stat.count;
+            const last = document.createElement('td');
+            last.textContent = stat.lastAskedAt ? stat.lastAskedAt.slice(0, 19).replace('T', ' ') : '—';
+            const action = document.createElement('td');
+            const toFaq = document.createElement('button');
+            toFaq.type = 'button';
+            toFaq.className = 'btn btn-outline-primary btn-sm';
+            toFaq.textContent = '转标准答案';
+            toFaq.addEventListener('click', () => prefillFaq(stat.question));
+            const toEntry = document.createElement('button');
+            toEntry.type = 'button';
+            toEntry.className = 'btn btn-outline-secondary btn-sm ms-1';
+            toEntry.textContent = '补知识条目';
+            toEntry.addEventListener('click', () => prefillEntry(stat.question));
+            action.append(toFaq, toEntry);
+            row.append(question, count, last, action);
+            tbody.appendChild(row);
+        });
+        if ((stats || []).length === 0) {
+            const emptyRow = document.createElement('tr');
+            const emptyCell = document.createElement('td');
+            emptyCell.colSpan = 4;
+            emptyCell.className = 'text-secondary';
+            emptyCell.textContent = '还没有没答上的问题。';
+            emptyRow.appendChild(emptyCell);
+            tbody.appendChild(emptyRow);
+        }
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+/** 从盲区问题预填知识条目表单：标题带过去，正文留占位待补。 */
+function prefillEntry(question) {
+    resetEntryForm();
+    $('entryTitle').value = question;
+    $('entryContent').value = '待补充：' + question + '\n';
+    showView('entries');
+}
+
+$('refreshMissBtn').addEventListener('click', () => loadMissStats());
+
 /* ---------------- 事件绑定 ---------------- */
 
 $('loginForm').addEventListener('submit', async (e) => {
@@ -917,7 +1277,10 @@ $('suggestChips').addEventListener('click', (e) => {
 });
 
 $('newSessionBtn').addEventListener('click', () => {
-    currentSessionId = createSession().id;
+    currentSessionId = newSessionId();
+    cachedMessages = [];
+    // 先放一个占位项，首次提问落库后服务端清单里就会出现它
+    cachedSessions.unshift({ id: currentSessionId, title: '新对话', updatedAt: null });
     renderSessionList();
     renderMessages();
     showView('chat');
@@ -951,9 +1314,9 @@ $('askForm').addEventListener('submit', async (e) => {
     if (empty) {
         empty.remove();
     }
-    storeMessage(currentSessionId, { role: 'user', text: question });
+    const askedSessionId = currentSessionId;
+    cachedMessages.push({ role: 'user', text: question });
     container.appendChild(messageElement({ role: 'user', text: question }));
-    nameSessionIfUntitled(question);
     const assistantEl = messageElement({ role: 'assistant', text: '', question });
     container.appendChild(assistantEl);
     scrollMessagesToBottom();
@@ -963,7 +1326,12 @@ $('askForm').addEventListener('submit', async (e) => {
         const result = $('askStream').checked
             ? await askStream(request, bubble)
             : await askOnce(request, bubble);
-        storeMessage(currentSessionId, { role: 'assistant', text: result.answer, hits: result.hits || [], question });
+        // 流式期间用户可能已切到别的会话：答案只进发起提问的那个会话的缓存
+        if (askedSessionId === currentSessionId) {
+            cachedMessages.push({ role: 'assistant', text: result.answer, hits: result.hits || [], question });
+        }
+        // 服务端已落库会话与消息，刷新左侧清单让新会话/新标题出现
+        refreshSessionList();
     } catch (err) {
         assistantEl.querySelector('.msg-text').textContent = '出错了：' + err.message;
         showMessage(err.message);
@@ -1190,6 +1558,13 @@ $('copyApiKeyBtn').addEventListener('click', async () => {
 
 /* 已登录过则直接进应用（Token 8 小时有效，过期后接口 401 再回登录页）。 */
 (async () => {
+    // 会话历史已改存服务端，清掉旧版本浏览器里的遗留键
+    localStorage.removeItem('kb.sessions');
+    Object.keys(localStorage).forEach((key) => {
+        if (key.indexOf('kb.messages.') === 0) {
+            localStorage.removeItem(key);
+        }
+    });
     await handleOidcCallback();
     // OIDC 开了才显示企业登录按钮
     try {

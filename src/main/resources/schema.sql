@@ -37,8 +37,25 @@ CREATE TABLE IF NOT EXISTS notification (id UUID PRIMARY KEY, username TEXT NOT 
 CREATE INDEX IF NOT EXISTS notification_username_idx ON notification (username, created_at DESC);
 
 -- 对外 API Key：只存 SHA-256 哈希，不存明文；吊销后失效；last_used_at 供管理员看调用情况
--- scope：all（除管理接口外都能调，等同于 Key 主人的角色）或 ask（只能问答与看清单）；expires_at 为空表示永不过期
+-- scope：all（除管理接口外都能调，等同于 Key 主人的角色）或 ask（只能问答、清单与机器人接口）；expires_at 为空表示永不过期
 CREATE TABLE IF NOT EXISTS api_key (id UUID PRIMARY KEY, key_hash TEXT NOT NULL UNIQUE, name TEXT NOT NULL, username TEXT NOT NULL, revoked BOOLEAN NOT NULL DEFAULT FALSE, last_used_at TIMESTAMPTZ NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), scope TEXT NOT NULL DEFAULT 'all', expires_at TIMESTAMPTZ NULL);
 ALTER TABLE api_key ADD COLUMN IF NOT EXISTS scope TEXT NOT NULL DEFAULT 'all';
 ALTER TABLE api_key ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NULL;
 CREATE INDEX IF NOT EXISTS api_key_username_idx ON api_key (username);
+
+-- 知识盲区：问答没答上（检索无命中或模型明确答“资料里没找到”）时落一条，盲区看板按问题原文聚合
+CREATE TABLE IF NOT EXISTS question_miss (id UUID PRIMARY KEY, username TEXT NOT NULL, department TEXT NULL, question TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS question_miss_question_idx ON question_miss (question);
+
+-- 标准答案/置顶 FAQ：管理员维护的权威答案，问答时优先于检索直接返回；keywords 为逗号分隔的匹配关键词
+CREATE TABLE IF NOT EXISTS standard_answer (id UUID PRIMARY KEY, question TEXT NOT NULL, answer TEXT NOT NULL, keywords TEXT NULL, department TEXT NOT NULL DEFAULT 'all', enabled BOOLEAN NOT NULL DEFAULT TRUE, username TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+
+-- 知识条目：在线撰写的知识，正文原文存表供编辑；切块后进 pgvector（source = 标题.md），category/tags 回填到块元数据
+CREATE TABLE IF NOT EXISTS knowledge_entry (id UUID PRIMARY KEY, title TEXT NOT NULL, source TEXT NOT NULL UNIQUE, content TEXT NOT NULL, category TEXT NULL, tags TEXT NULL, visibility TEXT NOT NULL, status TEXT NOT NULL, username TEXT NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS knowledge_entry_updated_idx ON knowledge_entry (updated_at DESC);
+
+-- 会话与消息（UI 层历史，跨设备同步）：与 chat_memory（喂模型、24 小时清理）相互独立，长期保留
+CREATE TABLE IF NOT EXISTS chat_session (username TEXT NOT NULL, id TEXT NOT NULL, title TEXT NULL, department TEXT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(), PRIMARY KEY (username, id));
+CREATE TABLE IF NOT EXISTS chat_message (id UUID PRIMARY KEY, username TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, refs JSONB NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
+CREATE INDEX IF NOT EXISTS chat_message_session_idx ON chat_message (username, session_id, created_at);
+CREATE INDEX IF NOT EXISTS chat_session_updated_idx ON chat_session (username, updated_at DESC);

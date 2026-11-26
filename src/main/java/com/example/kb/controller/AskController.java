@@ -115,11 +115,28 @@ public class AskController {
         if (request.getDepartment() != null) {
             request.setDepartment(Visibility.normalize(request.getDepartment()));
         }
+        normalizeSessionId(request);
         if (request.getMaxResults() != null && (request.getMaxResults() < 1 || request.getMaxResults() > 20)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "maxResults 仅允许 1-20");
         }
         if (request.getMinScore() != null && (request.getMinScore() < 0 || request.getMinScore() > 1)) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "minScore 仅允许 0-1");
         }
+    }
+
+    /** sessionId 归一：去空格、纯空白视为没传、超长报 400（会话键与会话历史表都直接拿它当键）。 */
+    private void normalizeSessionId(AskRequest request) {
+        if (request.getSessionId() == null) {
+            return;
+        }
+        String sessionId = request.getSessionId().trim();
+        if (sessionId.isEmpty()) {
+            request.setSessionId(null);
+            return;
+        }
+        if (sessionId.length() > 100) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "sessionId 最长 100 字符");
+        }
+        request.setSessionId(sessionId);
     }
 }

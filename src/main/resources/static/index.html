@@ -61,8 +61,11 @@
       <button type="button" class="sidebar-link active" data-view="dashboard">总览</button>
       <button type="button" class="sidebar-link" data-view="chat">智能问答</button>
       <button type="button" class="sidebar-link" data-view="manage">文档管理</button>
+      <button type="button" class="sidebar-link" data-view="entries" id="entriesNavBtn" hidden>知识条目</button>
+      <button type="button" class="sidebar-link" data-view="faq" id="faqNavBtn" hidden>标准答案</button>
       <button type="button" class="sidebar-link" data-view="notifications">通知 <span id="notifBadge" class="badge bg-red" hidden></span></button>
       <button type="button" class="sidebar-link" data-view="approval" id="approvalNavBtn" hidden>审批</button>
+      <button type="button" class="sidebar-link" data-view="miss" id="missNavBtn" hidden>知识盲区</button>
       <button type="button" class="sidebar-link" data-view="departments" id="deptNavBtn" hidden>部门管理</button>
       <button type="button" class="sidebar-link" data-view="audit" id="auditNavBtn" hidden>审计日志</button>
       <button type="button" class="sidebar-link" data-view="admin" id="adminNavBtn" hidden>用户管理</button>
@@ -393,6 +396,7 @@
           </div>
           <div class="card-body">
             <p class="text-secondary">给别的系统调问答、入库接口用，请求头带 <code>X-API-Key</code>；权限就是创建者的角色，管理接口不认 Key。范围选“仅问答”时只能调问答与清单接口；有效期不填表示永不过期。</p>
+            <p class="text-secondary">机器人对接：建一把“仅问答”的密钥，POST <code>/api/bot/ask</code>（请求头 <code>X-API-Key</code>），入参 <code>{"question":"问题"}</code> 兼容钉钉/企微文本消息体，<code>platform</code> 传 <code>dingtalk</code> 或 <code>wecom</code> 时按 IM 回复格式返回；IM 平台侧的回调与验签在企业后台配置后转发到本接口。</p>
             <form id="createApiKeyForm">
               <div class="row g-2 align-items-end">
                 <div class="col-md-4">
@@ -425,6 +429,148 @@
             <div class="table-responsive mt-3">
               <table id="apiKeysTable" class="table table-vcenter">
                 <thead><tr><th>名字</th><th>创建者</th><th>范围</th><th>有效期至</th><th>创建于</th><th>最后使用</th><th>状态</th><th></th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="entriesView" class="page-view" hidden>
+      <div class="manage-inner">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">写知识条目</h2>
+          </div>
+          <div class="card-body">
+            <p class="text-secondary">在线撰写直接入库，不必做成文件；标题即来源名，审批规则与文件上传一致。</p>
+            <form id="entryForm">
+              <div class="row g-2">
+                <div class="col-md-4">
+                  <label class="form-label" for="entryTitle">标题</label>
+                  <input id="entryTitle" class="form-control" type="text" required maxlength="100">
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label" for="entryCategory">分类</label>
+                  <input id="entryCategory" class="form-control" type="text" maxlength="50" placeholder="如：制度">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label" for="entryTags">标签（逗号分隔）</label>
+                  <input id="entryTags" class="form-control" type="text" maxlength="200" placeholder="如：请假,考勤">
+                </div>
+                <div class="col-md-3">
+                  <label class="form-label" for="entryVisibility">可见性</label>
+                  <input id="entryVisibility" class="form-control" type="text" value="all" placeholder="all 或部门代号">
+                </div>
+                <div class="col-12">
+                  <label class="form-label" for="entryContent">正文</label>
+                  <textarea id="entryContent" class="form-control" rows="8" required placeholder="直接写知识正文，入库后按切块检索"></textarea>
+                </div>
+                <div class="col-12 d-flex gap-2">
+                  <button type="submit" id="entrySubmitBtn" class="btn btn-primary">保存入库</button>
+                  <button type="button" id="entryCancelEditBtn" class="btn btn-outline-secondary" hidden>取消编辑</button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">知识条目清单</h2>
+          </div>
+          <div class="card-body">
+            <div class="d-flex align-items-center gap-2 mb-3">
+              <button id="refreshEntriesBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+              <span id="entriesInfo" class="text-secondary"></span>
+            </div>
+            <div class="table-responsive">
+              <table id="entriesTable" class="table table-vcenter">
+                <thead><tr><th>标题</th><th>分类</th><th>标签</th><th>可见性</th><th>状态</th><th>更新时间</th><th></th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="faqView" class="page-view" hidden>
+      <div class="manage-inner">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">标准答案</h2>
+          </div>
+          <div class="card-body">
+            <p class="text-secondary">命中后问答直接返回这里的答案，不走检索不调模型；问题原文一致或包含任一关键词即命中。差评回答与知识盲区都可直接转成标准答案。</p>
+            <form id="faqForm">
+              <div class="row g-2">
+                <div class="col-md-4">
+                  <label class="form-label" for="faqQuestion">问题</label>
+                  <input id="faqQuestion" class="form-control" type="text" required maxlength="200">
+                </div>
+                <div class="col-md-4">
+                  <label class="form-label" for="faqKeywords">匹配关键词（逗号分隔，可选）</label>
+                  <input id="faqKeywords" class="form-control" type="text" maxlength="200" placeholder="如：报销,差旅">
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label" for="faqDepartment">生效部门</label>
+                  <input id="faqDepartment" class="form-control" type="text" value="all" placeholder="all 或部门代号">
+                </div>
+                <div class="col-md-2" id="faqEnabledBox" hidden>
+                  <label class="form-label">启用</label>
+                  <label class="form-check mt-1">
+                    <input id="faqEnabled" class="form-check-input" type="checkbox" checked>
+                    <span class="form-check-label">启用中</span>
+                  </label>
+                </div>
+                <div class="col-12">
+                  <label class="form-label" for="faqAnswer">答案</label>
+                  <textarea id="faqAnswer" class="form-control" rows="4" required></textarea>
+                </div>
+                <div class="col-12 d-flex gap-2">
+                  <button type="submit" id="faqSubmitBtn" class="btn btn-primary">保存</button>
+                  <button type="button" id="faqCancelEditBtn" class="btn btn-outline-secondary" hidden>取消编辑</button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">标准答案清单</h2>
+          </div>
+          <div class="card-body">
+            <div class="d-flex align-items-center gap-2 mb-3">
+              <button id="refreshFaqBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+              <span id="faqInfo" class="text-secondary"></span>
+            </div>
+            <div class="table-responsive">
+              <table id="faqTable" class="table table-vcenter">
+                <thead><tr><th>问题</th><th>关键词</th><th>部门</th><th>状态</th><th>更新时间</th><th></th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="missView" class="page-view" hidden>
+      <div class="manage-inner">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">知识盲区（没答上的问题）</h2>
+          </div>
+          <div class="card-body">
+            <div class="d-flex align-items-center gap-2 mb-3">
+              <input id="missKeyword" class="form-control" type="text" style="max-width:240px" placeholder="按问题过滤">
+              <button id="refreshMissBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+              <span class="text-secondary">把问得多又答不上的问题补进知识库或标准答案</span>
+            </div>
+            <div class="table-responsive">
+              <table id="missTable" class="table table-vcenter">
+                <thead><tr><th>问题</th><th>提问次数</th><th>最近提问</th><th></th></tr></thead>
                 <tbody></tbody>
               </table>
             </div>

@@ -9,7 +9,6 @@ import com.example.kb.dto.DocumentListResponse;
 import com.example.kb.dto.DocumentSummary;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.store.embedding.EmbeddingStore;
-import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -27,10 +26,12 @@ public class DocumentManageService {
 
     private final JdbcTemplate jdbcTemplate;
     private final EmbeddingStore<TextSegment> embeddingStore;
+    private final DocumentVersionQueryHelper documentVersionQueryHelper;
 
     public DocumentManageService(JdbcTemplate jdbcTemplate, EmbeddingStore<TextSegment> embeddingStore) {
         this.jdbcTemplate = jdbcTemplate;
         this.embeddingStore = embeddingStore;
+        this.documentVersionQueryHelper = new DocumentVersionQueryHelper(jdbcTemplate, embeddingStore);
     }
 
     /**
@@ -80,63 +81,47 @@ public class DocumentManageService {
         return response;
     }
 
-    private static String buildVisibilityCondition(String department) {
-        return department == null ? "metadata->>'visibility' = ?" : "metadata->>'visibility' IN (?, ?)";
+    private String buildVisibilityCondition(String department) {
+        return documentVersionQueryHelper.buildVisibilityCondition(department);
     }
 
-    private static Object[] buildVisibilityParams(String department) {
-        return department == null ? new Object[]{Visibility.ALL} : new Object[]{Visibility.ALL, department};
+    private Object[] buildVisibilityParams(String department) {
+        return documentVersionQueryHelper.buildVisibilityParams(department);
     }
 
     /** 某篇文档的可见性（审批与删除的权限判断用）；不存在返回 null。 */
     public String getVisibility(String source) {
-        List<String> values = jdbcTemplate.query(
-                "SELECT metadata->>'visibility' FROM " + TABLE + " WHERE metadata->>'source' = ? LIMIT 1",
-                (rs, rowNum) -> rs.getString(1), source);
-        return values.isEmpty() ? null : values.get(0);
+        return documentVersionQueryHelper.getVisibility(source);
+    }
+
+    /** 某篇文档当前版的审批状态（回滚后同步条目行状态用）；不存在返回 null，块没存状态按 approved 算。 */
+    public String currentStatus(String source) {
+        return documentVersionQueryHelper.currentStatus(source);
     }
 
     /** 某篇文档当前版本的文件哈希（去重用）：只看未被 superseded 的现行版，没有块或老块没存哈希时返回 null。 */
     public String findFileHash(String source) {
-        List<String> values = jdbcTemplate.query(
-                "SELECT metadata->>'file_hash' FROM " + TABLE + " WHERE metadata->>'source' = ? "
-                        + "AND COALESCE(metadata->>'status','approved') <> 'superseded' LIMIT 1",
-                (rs, rowNum) -> rs.getString(1), source);
-        return values.isEmpty() ? null : values.get(0);
+        return documentVersionQueryHelper.findFileHash(source);
     }
 
     /** 同名替换的下一个版本号：已有最大版本 +1，首版为 1。 */
     public int nextVersion(String source) {
-        return currentVersion(source) + 1;
+        return documentVersionQueryHelper.nextVersion(source);
     }
 
     /** 某篇文档的当前版本号（最大版，含已 superseded 的旧版）；不存在返回 0。 */
     public int currentVersion(String source) {
-        Integer max = jdbcTemplate.queryForObject(
-                "SELECT COALESCE(max(CAST(NULLIF(metadata->>'version','') AS INTEGER)), 0) FROM " + TABLE
-                        + " WHERE metadata->>'source' = ?",
-                Integer.class, source);
-        return max == null ? 0 : max;
+        return documentVersionQueryHelper.currentVersion(source);
     }
 
     /** 某篇文档的全部版本号（从小到大，含已 superseded 的旧版），回滚下拉框用；不存在返回空列表。 */
     public List<Integer> listVersions(String source) {
-        return jdbcTemplate.query(
-                "SELECT DISTINCT CAST(NULLIF(metadata->>'version','') AS INTEGER) AS version FROM " + TABLE
-                        + " WHERE metadata->>'source' = ? ORDER BY version",
-                (rs, rowNum) -> rs.getInt("version"), source);
+        return documentVersionQueryHelper.listVersions(source);
     }
 
     /** 审批：当前版本的块统一改状态，返回改动的块数（0 表示文档不存在）；已 superseded 的旧版不动。 */
     public int setStatus(String source, String status) {
-        int version = currentVersion(source);
-        if (version == 0) {
-            return 0;
-        }
-        return jdbcTemplate.update("UPDATE " + TABLE
-                + " SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{status}', to_jsonb(?::text)) "
-                + "WHERE metadata->>'source' = ? AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?",
-                status, source, version);
+        return documentVersionQueryHelper.setStatus(source, status);
     }
 
     /**
@@ -144,86 +129,31 @@ public class DocumentManageService {
      * 目标版不存在或就是当前版时抛错；返回恢复的块数。
      */
     public int rollback(String source, int version) {
-        int current = currentVersion(source);
-        if (current == 0) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "文档不存在");
-        }
-        if (version >= current) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "只能回滚到比当前版更早的版本");
-        }
-        Integer targetChunks = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM " + TABLE + " WHERE metadata->>'source' = ? "
-                        + "AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?",
-                Integer.class, source, version);
-        if (targetChunks == null || targetChunks == 0) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "目标版本不存在");
-        }
-        markSupersededVersion(source, current);
-        return jdbcTemplate.update("UPDATE " + TABLE
-                + " SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{status}', "
-                + "to_jsonb(COALESCE(metadata->>'prev_status','approved'))) "
-                + "WHERE metadata->>'source' = ? AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?",
-                source, version);
-    }
-
-    /** 把指定版本的块改成 superseded，同时把改之前的状态记到 prev_status（回滚时按它恢复）。 */
-    private int markSupersededVersion(String source, int version) {
-        return jdbcTemplate.update("UPDATE " + TABLE
-                + " SET metadata = jsonb_set(jsonb_set(COALESCE(metadata, '{}'::jsonb), '{status}', "
-                + "to_jsonb('superseded'::text)), '{prev_status}', "
-                + "to_jsonb(COALESCE(metadata->>'status','approved'))) "
-                + "WHERE metadata->>'source' = ? AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?",
-                source, version);
+        return documentVersionQueryHelper.rollback(source, version);
     }
 
     /** 待审批的文档数（总览仪表盘用）：department 为 null 只算全员可见的。 */
     public int countPending(String department) {
-        String where = "COALESCE(metadata->>'status','approved') = 'pending' AND " + buildVisibilityCondition(department);
-        Integer count = jdbcTemplate.queryForObject(
-                "SELECT count(DISTINCT metadata->>'source') FROM " + TABLE + " WHERE " + where,
-                Integer.class, buildVisibilityParams(department));
-        return count == null ? 0 : count;
+        return documentVersionQueryHelper.countPending(department);
     }
 
     /**
      * 统计指定 source 的当前版块数（已 superseded 的旧版不算）。Postgres 的 count(*) 返回 bigint，用 Long 接收避免类型窄化问题。
      */
     public int countBySource(String source) {
-        Long count = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM " + TABLE + " WHERE metadata->>'source' = ? "
-                        + "AND COALESCE(metadata->>'status','approved') <> 'superseded'",
-                Long.class, source);
-        if (count == null) {
-            return 0;
-        }
-        return count.intValue();
-    }
-
-    /** 统计指定 source 的全部块数（含已 superseded 的旧版），删除接口的删除量用。 */
-    private int countAllBySource(String source) {
-        Long count = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM " + TABLE + " WHERE metadata->>'source' = ?",
-                Long.class, source);
-        return count == null ? 0 : count.intValue();
+        return documentVersionQueryHelper.countBySource(source);
     }
 
     /**
      * 删除指定文档的全部块（含已 superseded 的旧版），deletedChunks 为删除前后统计差值（实际删除量）。
      */
     public DeleteDocumentResponse deleteDocument(String source) {
-        int before = countAllBySource(source);
-        removeBySource(source);
-        int deletedChunks = before - countAllBySource(source);
-        DeleteDocumentResponse response = new DeleteDocumentResponse();
-        response.setSource(source);
-        response.setDeletedChunks(deletedChunks);
-        response.setDeleted(deletedChunks > 0);
-        return response;
+        return documentVersionQueryHelper.deleteDocument(source);
     }
 
     /** 删指定 source 的全部块，供删除接口复用。 */
     public void removeBySource(String source) {
-        embeddingStore.removeAll(MetadataFilterBuilder.metadataKey(MetadataKeys.SOURCE).isEqualTo(source));
+        documentVersionQueryHelper.removeBySource(source);
     }
 
     /**
@@ -232,11 +162,7 @@ public class DocumentManageService {
      * 用 SQL 而不用 Filter：旧块可能没有 batch 字段，Filter 的不等于匹配不到 NULL，COALESCE 才能兜住。
      */
     public int markSuperseded(String source, String keepBatch) {
-        return jdbcTemplate.update("UPDATE " + TABLE
-                + " SET metadata = jsonb_set(jsonb_set(COALESCE(metadata, '{}'::jsonb), '{status}', "
-                + "to_jsonb('superseded'::text)), '{prev_status}', "
-                + "to_jsonb(COALESCE(metadata->>'status','approved'))) "
-                + "WHERE metadata->>'source' = ? AND COALESCE(metadata->>'batch', '') <> ?", source, keepBatch);
+        return documentVersionQueryHelper.markSuperseded(source, keepBatch);
     }
 
     /**
@@ -246,11 +172,27 @@ public class DocumentManageService {
      */
     @Transactional
     public void publishVersion(String source, String batch, String status) {
-        jdbcTemplate.update("UPDATE " + TABLE
-                + " SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{status}', to_jsonb(?::text)) "
-                + "WHERE metadata->>'source' = ? AND COALESCE(metadata->>'batch', '') = ?",
-                status, source, batch);
-        markSuperseded(source, batch);
+        documentVersionQueryHelper.publishVersion(source, batch, status);
+    }
+
+    /**
+     * 条目分类与标签回填：写到指定版块的元数据上（其余版本不带），文档清单按它们展示与筛。
+     * category 与 tags 都为空时不做任何更新。
+     */
+    public void attachTagsAndCategory(String source, int version, String category, String tags) {
+        documentVersionQueryHelper.attachTagsAndCategory(source, version, category, tags);
+    }
+
+    /** null 或纯空白返回 null，其余返回去空格后的值。 */
+    static String blankToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        return trimmed;
     }
 
     /**
@@ -258,10 +200,6 @@ public class DocumentManageService {
      * 只删 superseded 的块，当前版（pending/approved/rejected）永远不动；返回删除的块数。
      */
     public int purgeOldSuperseded(int keep) {
-        return jdbcTemplate.update("DELETE FROM " + TABLE + " c "
-                + "WHERE COALESCE(c.metadata->>'status', 'approved') = 'superseded' "
-                + "AND CAST(NULLIF(c.metadata->>'version', '') AS INTEGER) <= "
-                + "(SELECT COALESCE(max(CAST(NULLIF(metadata->>'version', '') AS INTEGER)), 0) - ? "
-                + "FROM " + TABLE + " WHERE metadata->>'source' = c.metadata->>'source')", keep);
+        return documentVersionQueryHelper.purgeOldSuperseded(keep);
     }
 }

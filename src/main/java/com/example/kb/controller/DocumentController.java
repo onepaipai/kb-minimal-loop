@@ -10,6 +10,7 @@ import com.example.kb.service.AuditService;
 import com.example.kb.security.DepartmentScope;
 import com.example.kb.security.UserPrincipal;
 import com.example.kb.service.DocumentManageService;
+import com.example.kb.service.KnowledgeEntryService;
 import com.example.kb.service.NotificationService;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -20,7 +21,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
-/** 已入库文档管理接口：清单、删除与审批（批准/驳回）。 */
+/** 已入库文档管理接口：清单、删除与审批（批准/驳回）；条目来源的文档会同步条目行状态。 */
 @RestController
 @RequestMapping("/api")
 public class DocumentController {
@@ -30,12 +31,14 @@ public class DocumentController {
     private final DocumentManageService documentManageService;
     private final AuditService auditService;
     private final NotificationService notificationService;
+    private final KnowledgeEntryService knowledgeEntryService;
 
     public DocumentController(DocumentManageService documentManageService, AuditService auditService,
-                              NotificationService notificationService) {
+                              NotificationService notificationService, KnowledgeEntryService knowledgeEntryService) {
         this.documentManageService = documentManageService;
         this.auditService = auditService;
         this.notificationService = notificationService;
+        this.knowledgeEntryService = knowledgeEntryService;
     }
 
     /**
@@ -61,42 +64,45 @@ public class DocumentController {
         return documentManageService.listDocuments(effectiveDepartment, page, size, status, includePending);
     }
 
-    /** 删除指定文档的全部块：管理员可删全部，部门管理员只删本部门的。 */
+    /** 删除指定文档的全部块：管理员可删全部，部门管理员只删本部门的；条目来源的连条目行一起删。 */
     @DeleteMapping("/document")
     public DeleteDocumentResponse deleteDocument(@RequestParam("source") String source) {
         UserPrincipal user = DepartmentScope.requireCurrentUser();
         String visibility = requireDocumentVisibility(source);
         DepartmentScope.requireCanDeleteDocument(user, visibility);
         DeleteDocumentResponse response = documentManageService.deleteDocument(source);
+        knowledgeEntryService.deleteBySource(source);
         auditService.record(user.username(), "DELETE_DOC", source, "deletedChunks=" + response.getDeletedChunks());
         return response;
     }
 
-    /** 批准文档发布：整篇文档的块统一改成已发布，问答开始能查到。 */
+    /** 批准文档发布：整篇文档的块统一改成已发布，问答开始能查到；条目来源同步条目行状态。 */
     @PostMapping("/document/approve")
     public Map<String, Object> approveDocument(@RequestParam("source") String source) {
         UserPrincipal user = DepartmentScope.requireCurrentUser();
         String visibility = requireDocumentVisibility(source);
         DepartmentScope.requireCanApprove(user, visibility);
         int chunks = documentManageService.setStatus(source, "approved");
+        knowledgeEntryService.syncStatusBySource(source, "approved");
         auditService.record(user.username(), "APPROVE", source, "chunks=" + chunks);
         notificationService.notifyDecision(source, user.username(), true);
         return Map.of("source", source, "status", "approved", "chunks", chunks);
     }
 
-    /** 驳回文档：整篇文档的块统一改成已驳回，问答查不到，删了可重新上传。 */
+    /** 驳回文档：整篇文档的块统一改成已驳回，问答查不到，删了可重新上传；条目来源同步条目行状态。 */
     @PostMapping("/document/reject")
     public Map<String, Object> rejectDocument(@RequestParam("source") String source) {
         UserPrincipal user = DepartmentScope.requireCurrentUser();
         String visibility = requireDocumentVisibility(source);
         DepartmentScope.requireCanApprove(user, visibility);
         int chunks = documentManageService.setStatus(source, "rejected");
+        knowledgeEntryService.syncStatusBySource(source, "rejected");
         auditService.record(user.username(), "REJECT", source, "chunks=" + chunks);
         notificationService.notifyDecision(source, user.username(), false);
         return Map.of("source", source, "status", "rejected", "chunks", chunks);
     }
 
-    /** 回滚到指定旧版：目标版恢复成被替换之前的状态，当前版改成 superseded。 */
+    /** 回滚到指定旧版：目标版恢复成被替换之前的状态，当前版改成 superseded；条目来源按恢复后的状态同步。 */
     @PostMapping("/document/rollback")
     public Map<String, Object> rollbackDocument(@RequestParam("source") String source,
                                                 @RequestParam("version") int version) {
@@ -104,6 +110,7 @@ public class DocumentController {
         String visibility = requireDocumentVisibility(source);
         DepartmentScope.requireCanApprove(user, visibility);
         int chunks = documentManageService.rollback(source, version);
+        knowledgeEntryService.syncStatusBySource(source, documentManageService.currentStatus(source));
         auditService.record(user.username(), "ROLLBACK", source, "version=" + version + ",chunks=" + chunks);
         return Map.of("source", source, "version", version, "chunks", chunks);
     }

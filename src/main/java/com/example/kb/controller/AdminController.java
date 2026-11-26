@@ -10,6 +10,7 @@ import com.example.kb.security.DepartmentScope;
 import com.example.kb.security.UserPrincipal;
 import com.example.kb.security.UserService;
 import com.example.kb.service.FeedbackService;
+import com.example.kb.service.QuestionMissService;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -23,7 +24,7 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 /**
- * 管理接口：创建用户、查用户清单、查审计日志、看问答反馈统计。
+ * 管理接口：创建用户、查用户清单、查审计日志、看问答反馈统计、看知识盲区看板。
  * 用户管理：管理员管全部，部门管理员只管本部门的人；审计日志与反馈统计仅管理员能看。
  */
 @RestController
@@ -33,11 +34,14 @@ public class AdminController {
     private final UserService userService;
     private final AuditService auditService;
     private final FeedbackService feedbackService;
+    private final QuestionMissService questionMissService;
 
-    public AdminController(UserService userService, AuditService auditService, FeedbackService feedbackService) {
+    public AdminController(UserService userService, AuditService auditService, FeedbackService feedbackService,
+                           QuestionMissService questionMissService) {
         this.userService = userService;
         this.auditService = auditService;
         this.feedbackService = feedbackService;
+        this.questionMissService = questionMissService;
     }
 
     /** 创建用户：用户名已存在报 409，role 只允许四档，密码至少 10 位且含字母和数字；部门管理员只能建本部门的人。 */
@@ -97,5 +101,24 @@ public class AdminController {
     @PreAuthorize("hasRole('ADMIN')")
     public FeedbackService.FeedbackStats feedbackStats() {
         return feedbackService.stats();
+    }
+
+    /**
+     * 知识盲区看板：没答上的问题按原文聚合，次数多在前；q 可选按问题过滤，limit 上限 100。
+     * 管理员看全部，部门管理员只看本部门的提问。
+     */
+    @GetMapping("/miss-stats")
+    @PreAuthorize("hasRole('ADMIN') or hasRole('DEPT_ADMIN')")
+    public List<QuestionMissService.MissStat> missStats(@RequestParam(value = "q", required = false) String q,
+                                                        @RequestParam(value = "limit", defaultValue = "50") int limit) {
+        if (limit < 1 || limit > 100) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "limit 仅允许 1-100");
+        }
+        UserPrincipal caller = DepartmentScope.requireCurrentUser();
+        String department = null;
+        if (!caller.isAdmin()) {
+            department = caller.department();
+        }
+        return questionMissService.stats(department, q, limit);
     }
 }
