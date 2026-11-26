@@ -9,9 +9,9 @@ async function loadTrend() {
         const svg = $('trendChart');
         svg.textContent = '';
         const series = [
-            { key: 'feedback', color: '#206bc4', label: '反馈' },
-            { key: 'misses', color: '#d63965', label: '盲区' },
-            { key: 'ingests', color: '#2fb344', label: '入库' },
+            { key: 'feedback', color: 'var(--kb-brand, #206bc4)', label: '反馈' },
+            { key: 'misses', color: 'var(--kb-danger, #d63965)', label: '盲区' },
+            { key: 'ingests', color: 'var(--kb-success, #2fb344)', label: '入库' },
         ];
         const max = Math.max(1, ...rows.flatMap((row) => series.map((item) => row[item.key] || 0)));
         const groupWidth = 700 / Math.max(1, rows.length);
@@ -34,7 +34,7 @@ async function loadTrend() {
             label.setAttribute('x', String(index * groupWidth + groupWidth / 2));
             label.setAttribute('y', '165');
             label.setAttribute('text-anchor', 'middle');
-            label.setAttribute('fill', '#8a94a6');
+            label.setAttribute('fill', 'var(--kb-text-muted, #8a94a6)');
             label.setAttribute('font-size', '10');
             label.textContent = (row.date || '').slice(5);
             svg.appendChild(label);
@@ -66,13 +66,29 @@ async function searchOnly() {
     scrollMessagesToBottom();
     try {
         const request = buildAskRequest(question);
-        const hits = await api('/api/search', { method: 'POST', body: request });
+        const grouped = await api('/api/search/grouped', { method: 'POST', body: request });
         const bubble = resultEl.querySelector('.msg-bubble');
-        bubble.querySelector('.msg-text').textContent = '命中 ' + hits.length + ' 块（未生成答案）';
-        renderHitsInto(appendHitsContainer(bubble), hits);
+        const textEl = bubble.querySelector('.msg-text');
+        const sources = Object.keys(grouped);
+        textEl.textContent = '命中 ' + sources.length + ' 篇文档、'
+            + Object.values(grouped).reduce((n, list) => n + list.length, 0) + ' 块（未生成答案）';
+        const container = appendHitsContainer(bubble);
+        sources.forEach((source) => {
+            const group = document.createElement('details');
+            group.className = 'hit-group';
+            group.open = true;
+            const title = document.createElement('summary');
+            title.className = 'hit-group-title';
+            title.textContent = source + '（' + grouped[source].length + ' 块）';
+            group.appendChild(title);
+            const inner = document.createElement('div');
+            renderHitsInto(inner, grouped[source]);
+            group.appendChild(inner);
+            container.appendChild(group);
+        });
         scrollMessagesToBottom();
     } catch (e) {
-        resultEl.querySelector('.msg-text').textContent = e.message;
+        showError(e.message);
     }
 }
 
@@ -100,15 +116,25 @@ async function downloadDocument(source) {
     }
 }
 
-/** 在线文本预览：把拼回的全文放进一个弹层，不做原格式渲染。 */
-async function previewDocument(source) {
+/** 在线文本预览：纯 CSS 抽屉展示拼回的全文，替换原来的 window.alert。 */
+async function previewDocument(source, version) {
     try {
-        const data = await api('/api/document/preview?source=' + encodeURIComponent(source));
-        showMessage('「' + source + '」全文预览');
-        window.alert('「' + source + '」\n\n' + (data.text || '（无正文）'));
+        let path = '/api/document/preview?source=' + encodeURIComponent(source);
+        if (version !== undefined && version !== null && version !== 'current') {
+            path += '&version=' + encodeURIComponent(version);
+        }
+        const data = await api(path);
+        $('previewTitle').textContent = '「' + source + '」'
+            + (data.version === 'current' ? ' 当前版' : ' v' + data.version);
+        $('previewText').textContent = data.text || '（无正文）';
+        $('previewDrawer').hidden = false;
     } catch (e) {
-        showMessage(e.message);
+        showError(e.message);
     }
+}
+
+function closePreviewDrawer() {
+    $('previewDrawer').hidden = true;
 }
 
 /** 批量删文档：勾选的行一起提交，返回里失败项单独提示。 */

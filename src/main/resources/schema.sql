@@ -65,3 +65,7 @@ CREATE TABLE IF NOT EXISTS chat_session (username TEXT NOT NULL, id TEXT NOT NUL
 CREATE TABLE IF NOT EXISTS chat_message (id UUID PRIMARY KEY, username TEXT NOT NULL, session_id TEXT NOT NULL, role TEXT NOT NULL, content TEXT NOT NULL, refs JSONB NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT now());
 CREATE INDEX IF NOT EXISTS chat_message_session_idx ON chat_message (username, session_id, created_at);
 CREATE INDEX IF NOT EXISTS chat_session_updated_idx ON chat_session (username, updated_at DESC);
+
+-- 消息级操作：收藏标记（老库启动时自动补列）
+ALTER TABLE chat_message ADD COLUMN IF NOT EXISTS starred BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE INDEX IF NOT EXISTS chat_message_starred_idx ON chat_message (username, starred, created_at DESC);

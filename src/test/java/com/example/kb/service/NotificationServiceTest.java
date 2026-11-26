@@ -11,6 +11,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
@@ -58,6 +59,17 @@ class NotificationServiceTest {
         verify(jdbcTemplate).update(anyString(), args.capture());
         assertEquals("editor", args.getValue()[1]);
         assertEquals(NotificationService.TYPE_APPROVED, args.getValue()[2]);
+    }
+
+    @Test
+    void rejectionBodyContainsReason() {
+        when(jdbcTemplate.query(anyString(), any(RowMapper.class), any(Object[].class)))
+                .thenReturn(List.of("editor"));
+        service().notifyDecision("a.txt", "admin", false, "格式不符合规范");
+        ArgumentCaptor<Object[]> args = ArgumentCaptor.forClass(Object[].class);
+        verify(jdbcTemplate).update(anyString(), args.capture());
+        assertEquals(NotificationService.TYPE_REJECTED, args.getValue()[2]);
+        assertTrue(String.valueOf(args.getValue()[4]).contains("格式不符合规范"));
     }
 
     @Test

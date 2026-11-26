@@ -58,7 +58,9 @@ public class KnowledgeEntryController {
     @GetMapping
     public List<KnowledgeEntryService.KnowledgeEntryItem> list(
             @RequestParam(value = "department", required = false) String department,
-            @RequestParam(value = "status", required = false) String status) {
+            @RequestParam(value = "status", required = false) String status,
+            @RequestParam(value = "category", required = false) String category,
+            @RequestParam(value = "tag", required = false) String tag) {
         if (status != null && !STATUSES.contains(status.trim().toLowerCase())) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "status 只允许 pending、approved、rejected");
         }
@@ -74,7 +76,7 @@ public class KnowledgeEntryController {
         if (user != null && !includePending) {
             callerUsername = user.username();
         }
-        return knowledgeEntryService.list(effectiveDepartment, status, includePending, callerUsername);
+        return knowledgeEntryService.list(effectiveDepartment, status, includePending, callerUsername, category, tag);
     }
 
     /** 条目详情（含正文）：编辑回填用；不可见的人按不存在处理。 */

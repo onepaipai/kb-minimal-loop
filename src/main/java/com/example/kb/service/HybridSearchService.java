@@ -3,6 +3,9 @@ package com.example.kb.service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executor;
+import java.util.concurrent.Executors;
 
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
@@ -30,14 +33,20 @@ public class HybridSearchService {
 
     /** 向量检索多取一倍做融合候选，最后仍只返回 maxResults 条 */
     private static final int VECTOR_OVERSAMPLE = 2;
-    /** 重排开启时融合先取的候选数，重排后再取前 maxResults 条 */
-    private static final int RERANK_CANDIDATES = 20;
+    /** 重排开启时融合先取的候选数，重排后再取前 maxResults 条；候选越少重排请求体越小、首字越快 */
+    private static final int RERANK_CANDIDATES = 10;
     /** ILIKE 命中少于 5 条时才跑 pg_trgm 模糊兜底（问答只取 5 块，关键词候选够 5 条就没必要再模糊） */
     private static final int FUZZY_MIN_ILIKE_HITS = 5;
 
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final JdbcTemplate jdbcTemplate;
     private final RerankService rerankService;
+    /** 向量路与关键词路互不依赖，并发发起砍掉一次串行 DB 往返；守护线程池随 JVM 退出 */
+    private final Executor searchExecutor = Executors.newFixedThreadPool(2, runnable -> {
+        Thread thread = new Thread(runnable, "hybrid-search-");
+        thread.setDaemon(true);
+        return thread;
+    });
 
     public HybridSearchService(EmbeddingStore<TextSegment> embeddingStore, JdbcTemplate jdbcTemplate,
                                RerankService rerankService) {
@@ -55,8 +64,13 @@ public class HybridSearchService {
      */
     public List<RetrievedChunk> search(Embedding queryEmbedding, Filter filter, String question, String department,
                                        List<String> sources, int maxResults, double minScore) {
-        List<RetrievedChunk> vectorRanked = searchVector(queryEmbedding, filter, maxResults, minScore);
-        List<RetrievedChunk> keywordRanked = searchKeyword(question, department, sources);
+        // 两路互不依赖，并发发起；各自结果与串行完全一致，RRF 参数顺序不变
+        CompletableFuture<List<RetrievedChunk>> vectorFuture = CompletableFuture.supplyAsync(
+                () -> searchVector(queryEmbedding, filter, maxResults, minScore), searchExecutor);
+        CompletableFuture<List<RetrievedChunk>> keywordFuture = CompletableFuture.supplyAsync(
+                () -> searchKeyword(question, department, sources), searchExecutor);
+        List<RetrievedChunk> vectorRanked = vectorFuture.join();
+        List<RetrievedChunk> keywordRanked = keywordFuture.join();
         // 重排开启时融合多取候选再重排取前 N；关闭时直接取前 N，重排服务原样返回，不多一次调用
         int fuseLimit = rerankService.isEnabled() ? RERANK_CANDIDATES : maxResults;
         List<RetrievedChunk> fused = fuse(vectorRanked, keywordRanked, fuseLimit);
@@ -163,7 +177,8 @@ public class HybridSearchService {
         }
     }
 
-    static List<String> tokenize(String question) {
+    /** 供搜索接口取命中词做高亮：与关键词检索同一套分词（含同义词扩展）。 */
+    public static List<String> tokenize(String question) {
         return HybridSearchTokenizer.tokenize(question);
     }
 

@@ -66,11 +66,11 @@ public class DashScopeRerankClient implements RerankClient {
         return ranked;
     }
 
-    /** 重排专用的 RestClient：连接 2 秒、读取 8 秒超时，重排慢了不等，直接回退。 */
+    /** 重排专用的 RestClient：连接 2 秒、读取 3 秒超时，重排慢了不等，直接回退 RRF。 */
     static RestClient restClient() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Duration.ofSeconds(2));
-        factory.setReadTimeout(Duration.ofSeconds(8));
+        factory.setReadTimeout(Duration.ofSeconds(3));
         return RestClient.builder().requestFactory(factory).build();
     }
 

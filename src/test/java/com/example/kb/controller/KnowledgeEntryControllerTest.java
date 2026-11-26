@@ -89,19 +89,20 @@ class KnowledgeEntryControllerTest {
 
     @Test
     void listRejectsUnknownStatus() {
-        ResponseStatusException error = assertThrows(ResponseStatusException.class, () -> controller.list(null, "draft"));
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> controller.list(null, "draft", null, null));
         assertEquals(HttpStatus.BAD_REQUEST, error.getStatusCode());
         assertTrue(error.getReason().contains("status"));
     }
 
     @Test
     void listPassesCallerUsernameForNonAdmin() {
-        when(knowledgeEntryService.list(anyString(), isNull(), anyBoolean(), eq("editor")))
+        when(knowledgeEntryService.list(anyString(), isNull(), anyBoolean(), eq("editor"), isNull(), isNull()))
                 .thenReturn(List.of());
 
-        controller.list(null, null);
+        controller.list(null, null, null, null);
 
-        verify(knowledgeEntryService).list(anyString(), isNull(), anyBoolean(), eq("editor"));
+        verify(knowledgeEntryService).list(anyString(), isNull(), anyBoolean(), eq("editor"), isNull(), isNull());
     }
 
     @Test

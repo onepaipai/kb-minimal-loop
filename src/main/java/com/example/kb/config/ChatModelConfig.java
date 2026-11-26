@@ -1,5 +1,7 @@
 package com.example.kb.config;
 
+import java.time.Duration;
+
 import dev.langchain4j.model.chat.ChatModel;
 import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.openai.OpenAiChatModel;
@@ -27,6 +29,7 @@ public class ChatModelConfig {
                 .baseUrl(baseUrl)
                 .apiKey(apiKey)
                 .modelName(modelName)
+                .timeout(Duration.ofSeconds(60))
                 .build();
     }
 
@@ -37,6 +40,7 @@ public class ChatModelConfig {
                 .baseUrl(baseUrl)
                 .apiKey(apiKey)
                 .modelName(modelName)
+                .timeout(Duration.ofSeconds(60))
                 .build();
     }
 }

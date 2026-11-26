@@ -35,7 +35,7 @@ curl -X POST http://localhost:8080/api/auth/logout -H "Content-Type: application
 - 登录加固：连续 5 次密码错误锁定账号 15 分钟；开了双因素的账号登录时多传 `totpCode`（6 位动态验证码，见 [双因素](#双因素认证totp)）；密码策略：至少 10 位且同时含字母和数字。
 - 限流走数据库（多实例共用）：已登录用户每分钟 120 次，未登录按 IP 每分钟 30 次，超了返回 429。
 - 企业登录（OIDC）：见 [部署](deployment.md) 配好 IdP 后，登录页出现“企业账号登录”按钮；点它跳去 IdP 登录，回来自动进应用。首次登录自动建一个 USER 账号，管理员用 `PUT /api/admin/users/{username}` 调它的角色和部门。相关接口：`GET /api/auth/oidc/enabled`（查是否开启）、`POST /api/auth/oidc/exchange`（凭回调的一次性码换 Token，5 分钟有效、用过即废）。
-- 对外 API Key：给别的系统调数据接口用，不用账号密码登录。请求头带 `X-API-Key: kb_...` 即可（不用再带 Bearer Token），权限就是 Key 创建者的角色；`/api/admin/**` 与 `/api/auth/**` 不认 Key，只能用 JWT。Key 在管理员的“API 密钥”页面创建，明文只显示一次。建 Key 时可限范围：`ask` 只能调问答与清单接口（`POST /api/ask`、`POST /api/ask-stream`、`POST /api/bot/ask`、`POST /api/search`、`GET /api/documents`、`GET /api/document/versions`），`all`（默认）除管理接口外都能调；可填有效期天数（1–3650，不填永不过期），过期后调任何接口都返回 401。
+- 对外 API Key：给别的系统调数据接口用，不用账号密码登录。请求头带 `X-API-Key: kb_...` 即可（不用再带 Bearer Token），权限就是 Key 创建者的角色；`/api/admin/**` 与 `/api/auth/**` 不认 Key，只能用 JWT。Key 在管理员的“API 密钥”页面创建，明文只显示一次。建 Key 时可限范围：`ask` 只能调问答与清单接口（`POST /api/ask`、`POST /api/ask-stream`、`POST /api/bot/ask`、`POST /api/search`、`POST /api/search/grouped`、`GET /api/documents`、`GET /api/document/versions`），`all`（默认）除管理接口外都能调；可填有效期天数（1–3650，不填永不过期），过期后调任何接口都返回 401。
 
 ## POST /api/ingest —— 上传文档入库
 
@@ -438,6 +438,45 @@ curl "http://localhost:8080/api/admin/stats/trend?days=7" -H "Authorization: Bea
 ```
 
 `days` 默认 7，允许 1-30；非管理员返回 403。
+
+## 导出、审批增强、版本对比、消息级操作与标签
+
+```bash
+# 导出：dataset 为 audit/miss/docs/sessions，format 为 csv(默认)/json/md，仅 ADMIN
+curl -OJ -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/admin/export?dataset=audit&format=csv"
+curl -OJ -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/admin/export?dataset=miss&format=md"
+
+# 驳回带理由：理由写进审计 detail 与上传人通知 body
+curl -X POST "http://localhost:8080/api/document/reject?source=报销制度.txt&reason=格式不符" \
+  -H "Authorization: Bearer $TOKEN"
+
+# 批量审批 / 批量改可见性（先统一校验权限，再逐条执行，非原子）
+curl -X POST http://localhost:8080/api/document/batch-review -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"sources":["a.txt","b.txt"],"status":"approved"}'
+curl -X POST http://localhost:8080/api/document/batch-visibility -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"sources":["a.txt"],"visibility":"hr"}'
+# 返回 {"requested":2,"reviewed":[...],"failed":[]} / {"requested":1,"updated":[...],"failed":[]}
+
+# 版本对比：preview 支持 version 参数，不传取当前版
+curl -H "Authorization: Bearer $TOKEN" "http://localhost:8080/api/document/preview?source=a.txt&version=1"
+
+# 消息级操作（按当前用户名隔离）
+curl -X PUT "http://localhost:8080/api/messages/{id}/star?starred=true" -H "Authorization: Bearer $TOKEN"
+curl -X DELETE "http://localhost:8080/api/messages/{id}" -H "Authorization: Bearer $TOKEN"
+curl "http://localhost:8080/api/messages/starred" -H "Authorization: Bearer $TOKEN"
+
+# 标签/分类字典（动态聚合，不建字典表）
+curl "http://localhost:8080/api/admin/tags" -H "Authorization: Bearer $TOKEN"
+# 返回 {"categories":[{"name":"财务","cnt":3}],"tags":[{"name":"报销","cnt":5}]}
+curl "http://localhost:8080/api/knowledge?category=财务&tag=报销" -H "Authorization: Bearer $TOKEN"
+
+# 按来源分组的检索结果（前端"仅搜索"用）；每条 hit 带 matchedTerms 供高亮
+curl -X POST http://localhost:8080/api/search/grouped -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" -d '{"question":"请假超过3天找谁批？"}'
+```
+
+`/api/search` 与 `/api/search/grouped` 都走同一套检索主干（向量化 + 并行混合检索 + 神经重排），不调聊天大模型；向量路不支持真分页，采用取前 N 截断（`maxResults` 1-20）。引用块点"查看原文"走 `/api/document/preview`，定位到整篇文本（不按块号锚点）。
 
 ## 健康检查
 

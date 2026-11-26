@@ -16,6 +16,7 @@ let docsPage = 0;
 let auditPage = 0;
 let notifPage = 0;
 let asking = false;
+let activeAskController = null;
 let currentSessionId = null;
 /* 会话与消息缓存在内存里，唯一事实来源是服务端（跨设备同步） */
 let cachedSessions = [];
@@ -23,9 +24,19 @@ let cachedMessages = [];
 let editingEntryId = null;
 let editingFaqId = null;
 
-function showMessage(text) {
+/** 顶部提示条：type 为 success / danger / warning / info，默认 info；旧调用只传文本仍然兼容。 */
+function showMessage(text, type) {
     messageEl.textContent = text;
+    messageEl.className = 'alert alert-' + (type || 'info');
     messageEl.hidden = !text;
+}
+
+function showSuccess(text) {
+    showMessage(text, 'success');
+}
+
+function showError(text) {
+    showMessage(text, 'danger');
 }
 
 /** 带 Token 的请求；401 时先用 Refresh Token 换一对新 Token 再重试一次，还不行才回登录页。 */
@@ -260,7 +271,8 @@ function mapServerMessages(items) {
             lastQuestion = item.content;
             messages.push({ role: 'user', text: item.content });
         } else {
-            messages.push({ role: 'assistant', text: item.content, hits: item.refs || [], question: lastQuestion });
+            messages.push({ role: 'assistant', text: item.content, hits: item.refs || [],
+                question: lastQuestion, messageId: item.id, starred: item.starred });
         }
     });
     return messages;
@@ -339,6 +351,12 @@ function messageElement(message) {
     if (message.question) {
         wrap.dataset.question = message.question;
     }
+    if (message.messageId) {
+        wrap.dataset.messageId = message.messageId;
+    }
+    const meta = document.createElement('div');
+    meta.className = 'msg-meta';
+    meta.textContent = message.role === 'user' ? '我' : '知识库助手';
     const bubble = document.createElement('div');
     bubble.className = 'msg-bubble';
     const text = document.createElement('div');
@@ -347,6 +365,7 @@ function messageElement(message) {
     bubble.appendChild(text);
     if (message.role === 'assistant' && message.hits && message.hits.length > 0) {
         const hits = document.createElement('div');
+        hits.className = 'hits';
         renderHitsInto(hits, message.hits);
         bubble.appendChild(hits);
     }
@@ -355,27 +374,88 @@ function messageElement(message) {
         feedback.className = 'feedback-row';
         const up = document.createElement('button');
         up.type = 'button';
-        up.className = 'btn btn-outline-secondary btn-sm fb-btn';
+        up.className = 'btn btn-ghost-secondary btn-sm fb-btn';
         up.textContent = '👍 有用';
         up.addEventListener('click', () => submitFeedback(wrap, up, true));
         const down = document.createElement('button');
         down.type = 'button';
-        down.className = 'btn btn-outline-secondary btn-sm fb-btn';
+        down.className = 'btn btn-ghost-secondary btn-sm fb-btn';
         down.textContent = '👎 没用';
         down.addEventListener('click', () => submitFeedback(wrap, down, false));
         feedback.append(up, down);
+        const copy = document.createElement('button');
+        copy.type = 'button';
+        copy.className = 'btn btn-ghost-secondary btn-sm';
+        copy.textContent = '复制';
+        copy.addEventListener('click', () => copyAnswer(wrap));
+        feedback.appendChild(copy);
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.className = 'btn btn-ghost-secondary btn-sm';
+        retry.textContent = '重新生成';
+        retry.addEventListener('click', () => regenerateAnswer(wrap));
+        feedback.appendChild(retry);
+        const star = document.createElement('button');
+        star.type = 'button';
+        star.className = 'btn btn-ghost-secondary btn-sm';
+        star.textContent = message.starred ? '★ 已收藏' : '☆ 收藏';
+        star.dataset.starred = String(Boolean(message.starred));
+        star.addEventListener('click', () => toggleStar(wrap, star));
+        feedback.appendChild(star);
         if (currentUser && (currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN')) {
             const toFaq = document.createElement('button');
             toFaq.type = 'button';
-            toFaq.className = 'btn btn-outline-secondary btn-sm';
+            toFaq.className = 'btn btn-ghost-secondary btn-sm';
             toFaq.textContent = '转标准答案';
             toFaq.addEventListener('click', () => prefillFaq(wrap.dataset.question || ''));
             feedback.appendChild(toFaq);
         }
         bubble.appendChild(feedback);
     }
-    wrap.appendChild(bubble);
+    wrap.append(meta, bubble);
     return wrap;
+}
+
+/** 复制回答到剪贴板；浏览器不支持时降级为提示。 */
+async function copyAnswer(wrap) {
+    const text = wrap.querySelector('.msg-text').textContent;
+    if (!text) {
+        return;
+    }
+    try {
+        await navigator.clipboard.writeText(text);
+        showSuccess('已复制回答');
+    } catch (e) {
+        showError('复制失败：' + e.message);
+    }
+}
+
+/** 重新生成：把原问题回填并直接重发一次（走当前流式/整段设置）。 */
+function regenerateAnswer(wrap) {
+    const question = wrap.dataset.question;
+    if (!question) {
+        return;
+    }
+    $('question').value = question;
+    $('askForm').requestSubmit();
+}
+
+/** 收藏/取消收藏当前回答：气泡记住服务端消息 id 后切换。 */
+async function toggleStar(wrap, button) {
+    const id = wrap.dataset.messageId;
+    if (!id) {
+        showError('这条回答还没有保存，稍后再试');
+        return;
+    }
+    const next = button.dataset.starred !== 'true';
+    try {
+        await api('/api/messages/' + id + '/star?starred=' + next, { method: 'PUT' });
+        button.dataset.starred = String(next);
+        button.textContent = next ? '★ 已收藏' : '☆ 收藏';
+        showSuccess(next ? '已收藏' : '已取消收藏');
+    } catch (e) {
+        showError(e.message);
+    }
 }
 
 /** 回答反馈：按原问答提交好评/差评，提交后禁用评分两个按钮（转标准答案保留可用）。 */
@@ -409,20 +489,65 @@ function renderMessages() {
     scrollMessagesToBottom();
 }
 
+/** 引用命中渲染：默认折叠，编号徽章 + 来源 chip + 高亮命中词 + 跳转原文按钮。 */
 function renderHitsInto(container, hits) {
     container.textContent = '';
+    container.classList.add('hits');
     (hits || []).forEach((hit) => {
-        const block = document.createElement('div');
+        const block = document.createElement('details');
         block.className = 'hit';
-        const meta = document.createElement('div');
-        meta.className = 'hit-meta';
-        meta.textContent = '[' + hit.index + '] ' + hit.source + ' · 综合分 ' + hit.score.toFixed(3);
+        const summary = document.createElement('summary');
+        summary.className = 'hit-meta';
+        const badge = document.createElement('span');
+        badge.className = 'hit-badge';
+        badge.textContent = '[' + hit.index + ']';
+        const source = document.createElement('span');
+        source.className = 'hit-source';
+        source.textContent = hit.source;
+        const score = document.createElement('span');
+        score.className = 'hit-score';
+        score.textContent = '综合分 ' + hit.score.toFixed(3);
+        summary.append(badge, source, score);
+        const jump = document.createElement('button');
+        jump.type = 'button';
+        jump.className = 'btn btn-ghost-secondary btn-sm hit-jump';
+        jump.textContent = '查看原文';
+        jump.addEventListener('click', (e) => {
+            e.preventDefault();
+            previewDocument(hit.source);
+        });
+        summary.appendChild(jump);
+        block.appendChild(summary);
         const text = document.createElement('div');
         text.className = 'hit-text';
-        text.textContent = hit.text;
-        block.append(meta, text);
+        highlightTerms(text, hit.text, hit.matchedTerms);
+        block.appendChild(text);
         container.appendChild(block);
     });
+}
+
+/** 纯 DOM 高亮：把命中词包进 <mark>，不用 innerHTML，避免注入。 */
+function highlightTerms(container, text, terms) {
+    const value = text || '';
+    if (!terms || terms.length === 0) {
+        container.textContent = value;
+        return;
+    }
+    const escaped = terms.filter(Boolean).map((t) => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    if (escaped.length === 0) {
+        container.textContent = value;
+        return;
+    }
+    const regex = new RegExp('(' + escaped.join('|') + ')', 'gi');
+    let last = 0;
+    for (const match of value.matchAll(regex)) {
+        container.appendChild(document.createTextNode(value.slice(last, match.index)));
+        const mark = document.createElement('mark');
+        mark.textContent = match[0];
+        container.appendChild(mark);
+        last = match.index + match[0].length;
+    }
+    container.appendChild(document.createTextNode(value.slice(last)));
 }
 
 /* ---------------- 问答 ---------------- */
@@ -445,33 +570,44 @@ function buildAskRequest(question) {
 
 
 async function askOnce(request, bubble) {
-    const response = await api('/api/ask', { method: 'POST', body: request });
-    bubble.querySelector('.msg-text').textContent = response.answer;
-    renderHitsInto(bubble.querySelector('.hits') || appendHitsContainer(bubble), response.hits);
-    scrollMessagesToBottom();
-    return response;
+    const textEl = bubble.querySelector('.msg-text');
+    textEl.classList.add('typing');
+    textEl.textContent = '检索并生成中…';
+    try {
+        const response = await api('/api/ask', { method: 'POST', body: request });
+        textEl.classList.remove('typing');
+        textEl.textContent = response.answer;
+        renderHitsInto(bubble.querySelector('.hits') || appendHitsContainer(bubble), response.hits);
+        scrollMessagesToBottom();
+        return response;
+    } catch (e) {
+        textEl.classList.remove('typing');
+        throw e;
+    }
 }
 
-function fetchAskStream(request) {
+function fetchAskStream(request, signal) {
     const token = localStorage.getItem(TOKEN_KEY);
     return fetch('/api/ask-stream', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
         body: JSON.stringify(request),
+        signal,
     });
 }
 
 function appendHitsContainer(bubble) {
     const hits = document.createElement('div');
+    hits.className = 'hits';
     bubble.appendChild(hits);
     return hits;
 }
 
 /** 手写 SSE 解析：fetch 不能用 EventSource（POST + Authorization 头只能走 fetch）。 */
-async function askStream(request, bubble) {
-    let response = await fetchAskStream(request);
+async function askStream(request, bubble, signal) {
+    let response = await fetchAskStream(request, signal);
     if (response.status === 401 && await tryRefresh()) {
-        response = await fetchAskStream(request);
+        response = await fetchAskStream(request, signal);
     }
     if (response.status === 401) {
         logout('登录已过期，请重新登录');
@@ -482,49 +618,94 @@ async function askStream(request, bubble) {
         throw new Error(err.message || '请求失败（' + response.status + '）');
     }
     const textEl = bubble.querySelector('.msg-text');
+    textEl.classList.add('typing');
+    textEl.textContent = '检索中…';
     const hitsEl = appendHitsContainer(bubble);
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
     let answer = '';
     let hits = [];
-    for (;;) {
-        const { done, value } = await reader.read();
-        if (done) {
-            break;
+    let firstToken = false;
+    let scrollQueued = false;
+    const queueScroll = () => {
+        if (scrollQueued) {
+            return;
         }
-        buffer += decoder.decode(value, { stream: true });
-        const events = buffer.split('\n\n');
-        buffer = events.pop();
-        for (const raw of events) {
-            let event = '';
-            const dataLines = [];
-            for (const line of raw.split('\n')) {
-                if (line.startsWith('event:')) {
-                    event = line.slice(6).trim();
-                } else if (line.startsWith('data:')) {
-                    dataLines.push(line.slice(5).replace(/^ /, ''));
+        scrollQueued = true;
+        requestAnimationFrame(() => {
+            scrollMessagesToBottom();
+            scrollQueued = false;
+        });
+    };
+    try {
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) {
+                break;
+            }
+            buffer += decoder.decode(value, { stream: true });
+            const events = buffer.split('\n\n');
+            buffer = events.pop();
+            for (const raw of events) {
+                let event = '';
+                const dataLines = [];
+                for (const line of raw.split('\n')) {
+                    if (line.startsWith('event:')) {
+                        event = line.slice(6).trim();
+                    } else if (line.startsWith('data:')) {
+                        dataLines.push(line.slice(5).replace(/^ /, ''));
+                    }
+                }
+                const data = dataLines.join('\n');
+                if (event === 'sources') {
+                    hits = JSON.parse(data);
+                    renderHitsInto(hitsEl, hits);
+                    textEl.textContent = '生成中…';
+                    queueScroll();
+                } else if (event === 'token') {
+                    if (!firstToken) {
+                        firstToken = true;
+                        textEl.classList.remove('typing');
+                        textEl.textContent = '';
+                    }
+                    answer += data;
+                    textEl.appendChild(document.createTextNode(data));
+                    queueScroll();
+                } else if (event === 'error') {
+                    throw new Error(data || '流式回答失败');
                 }
             }
-            const data = dataLines.join('\n');
-            if (event === 'sources') {
-                hits = JSON.parse(data);
-                renderHitsInto(hitsEl, hits);
-            } else if (event === 'token') {
-                answer += data;
-                textEl.textContent = answer;
+        }
+    } catch (e) {
+        if (e.name === 'AbortError') {
+            reader.cancel().catch(() => {});
+            if (!firstToken) {
+                textEl.classList.remove('typing');
+                textEl.textContent = '已停止生成';
             }
-            scrollMessagesToBottom();
+            return { answer, hits, stopped: true };
+        }
+        throw e;
+    } finally {
+        try {
+            reader.releaseLock();
+        } catch (e) {
+            // 流已关闭时忽略
         }
     }
-    return { answer, hits };
+    if (!firstToken) {
+        textEl.classList.remove('typing');
+        textEl.textContent = answer;
+    }
+    return { answer, hits, stopped: false };
 }
 
 /* ---------------- 视图切换 ---------------- */
 
 const VIEW_TITLES = { dashboard: '总览', chat: '智能问答', manage: '文档管理', entries: '知识条目',
     faq: '标准答案', notifications: '通知', approval: '审批', miss: '知识盲区', departments: '部门管理',
-    audit: '审计日志', admin: '用户管理', apikeys: 'API 密钥', password: '改密码' };
+    audit: '审计日志', admin: '用户管理', apikeys: 'API 密钥', password: '改密码', starred: '我的收藏' };
 
 function showView(name) {
     $('dashboardView').hidden = name !== 'dashboard';
@@ -540,6 +721,7 @@ function showView(name) {
     $('adminView').hidden = name !== 'admin';
     $('apikeysView').hidden = name !== 'apikeys';
     $('passwordView').hidden = name !== 'password';
+    $('starredView').hidden = name !== 'starred';
     document.querySelectorAll('.sidebar-link').forEach((link) => {
         link.classList.toggle('active', link.dataset.view === name);
     });
@@ -553,6 +735,9 @@ function showView(name) {
         loadPending();
     } else if (name === 'entries') {
         loadEntries();
+        loadTagOptions();
+    } else if (name === 'starred') {
+        loadStarred();
     } else if (name === 'faq') {
         loadFaqs();
     } else if (name === 'miss') {
@@ -627,6 +812,12 @@ async function loadDocuments(page) {
                 rollback.textContent = '回滚';
                 rollback.addEventListener('click', () => rollbackDocument(doc.source, doc.version));
                 action.appendChild(rollback);
+                const compare = document.createElement('button');
+                compare.type = 'button';
+                compare.className = 'btn btn-ghost-secondary btn-sm ms-1';
+                compare.textContent = '版本对比';
+                compare.addEventListener('click', () => openVersionCompare(doc.source, doc.version));
+                action.appendChild(compare);
             }
             row.append(select, source, chunks, visibility, status, version, action);
             tbody.appendChild(row);
@@ -826,6 +1017,12 @@ async function loadPending() {
         tbody.textContent = '';
         (data.documents || []).forEach((doc) => {
             const row = document.createElement('tr');
+            const select = document.createElement('td');
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'approval-checkbox';
+            checkbox.dataset.source = doc.source;
+            select.appendChild(checkbox);
             const source = document.createElement('td');
             source.textContent = doc.source;
             const chunks = document.createElement('td');
@@ -846,7 +1043,7 @@ async function loadPending() {
             reject.textContent = '驳回';
             reject.addEventListener('click', () => reviewDocument(doc.source, 'reject'));
             action.append(approve, reject);
-            row.append(source, chunks, visibility, version, action);
+            row.append(select, source, chunks, visibility, version, action);
             tbody.appendChild(row);
         });
     } catch (e) {
@@ -856,12 +1053,22 @@ async function loadPending() {
 
 async function reviewDocument(source, decision) {
     try {
-        await api('/api/document/' + decision + '?source=' + encodeURIComponent(source), { method: 'POST' });
-        showMessage('「' + source + '」已' + (decision === 'approve' ? '批准发布' : '驳回'));
+        let path = '/api/document/' + decision + '?source=' + encodeURIComponent(source);
+        if (decision === 'reject') {
+            const reason = window.prompt('请输入驳回理由（可留空）：');
+            if (reason === null) {
+                return;
+            }
+            if (reason.trim()) {
+                path += '&reason=' + encodeURIComponent(reason.trim());
+            }
+        }
+        await api(path, { method: 'POST' });
+        showSuccess('「' + source + '」已' + (decision === 'approve' ? '批准发布' : '驳回'));
         loadPending();
         loadDocuments(docsPage);
     } catch (e) {
-        showMessage(e.message);
+        showError(e.message);
     }
 }
 
@@ -948,9 +1155,20 @@ function statusText(status) {
     return '已发布';
 }
 
+let entryCategoryFilterValue = '';
+let entryTagFilterValue = '';
+
 async function loadEntries() {
     try {
-        const entries = await api('/api/knowledge');
+        const params = new URLSearchParams();
+        if (entryCategoryFilterValue) {
+            params.set('category', entryCategoryFilterValue);
+        }
+        if (entryTagFilterValue) {
+            params.set('tag', entryTagFilterValue);
+        }
+        const query = params.toString();
+        const entries = await api('/api/knowledge' + (query ? '?' + query : ''));
         $('entriesInfo').textContent = '共 ' + entries.length + ' 条';
         const tbody = $('entriesTable').querySelector('tbody');
         tbody.textContent = '';
@@ -1308,7 +1526,9 @@ $('loginForm').addEventListener('submit', async (e) => {
 $('logoutBtn').addEventListener('click', () => logout('', true));
 
 $('menuBtn').addEventListener('click', () => {
-    $('appView').classList.toggle('sidebar-open');
+    const shell = $('appView');
+    shell.classList.toggle('sidebar-open');
+    $('menuBtn').setAttribute('aria-expanded', String(shell.classList.contains('sidebar-open')));
 });
 
 $('quickAskBtn').addEventListener('click', () => showView('chat'));
@@ -1355,7 +1575,12 @@ $('askForm').addEventListener('submit', async (e) => {
     if (!question) {
         return;
     }
+    const sendBtn = $('askForm').querySelector('button[type="submit"]');
+    const controller = new AbortController();
+    activeAskController = controller;
     asking = true;
+    sendBtn.disabled = true;
+    $('stopAskBtn').hidden = false;
     showMessage('');
     $('question').value = '';
     const container = $('messages');
@@ -1373,20 +1598,35 @@ $('askForm').addEventListener('submit', async (e) => {
         const request = buildAskRequest(question);
         const bubble = assistantEl.querySelector('.msg-bubble');
         const result = $('askStream').checked
-            ? await askStream(request, bubble)
+            ? await askStream(request, bubble, controller.signal)
             : await askOnce(request, bubble);
         // 流式期间用户可能已切到别的会话：答案只进发起提问的那个会话的缓存
         if (askedSessionId === currentSessionId) {
-            cachedMessages.push({ role: 'assistant', text: result.answer, hits: result.hits || [], question });
+            cachedMessages.push({ role: 'assistant', text: result.answer,
+                hits: result.hits || [], question });
         }
         // 服务端已落库会话与消息，刷新左侧清单让新会话/新标题出现
         refreshSessionList();
     } catch (err) {
-        assistantEl.querySelector('.msg-text').textContent = '出错了：' + err.message;
-        showMessage(err.message);
+        const textEl = assistantEl.querySelector('.msg-text');
+        textEl.classList.remove('typing');
+        textEl.classList.add('state-error');
+        textEl.textContent = '出错了：' + err.message;
+        showError(err.message);
     } finally {
         asking = false;
+        activeAskController = null;
+        sendBtn.disabled = false;
+        $('stopAskBtn').hidden = true;
         scrollMessagesToBottom();
+    }
+});
+
+/** 停止生成：中断当前 SSE 请求，已收到的 token 保留在气泡里。 */
+$('stopAskBtn').addEventListener('click', () => {
+    if (activeAskController) {
+        activeAskController.abort();
+        activeAskController = null;
     }
 });
 

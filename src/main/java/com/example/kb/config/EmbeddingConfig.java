@@ -1,5 +1,7 @@
 package com.example.kb.config;
 
+import java.time.Duration;
+
 import dev.langchain4j.data.document.DocumentSplitter;
 import dev.langchain4j.model.embedding.EmbeddingModel;
 import dev.langchain4j.model.openai.OpenAiEmbeddingModel;
@@ -35,6 +37,7 @@ public class EmbeddingConfig {
                 .apiKey(apiKey)
                 .modelName(modelName)
                 .dimensions(EMBEDDING_DIMENSION)
+                .timeout(Duration.ofSeconds(15))
                 .build();
     }
 

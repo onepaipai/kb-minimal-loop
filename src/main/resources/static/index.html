@@ -1,11 +1,15 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-bs-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#16233a">
+<meta name="description" content="企业知识库：文档入库、检索问答、标准答案与知识盲区看板">
 <title>企业知识库</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23206bc4'/%3E%3Ctext x='16' y='22' text-anchor='middle' font-size='16' fill='white'%3EKB%3C/text%3E%3C/svg%3E">
 <link rel="stylesheet" href="tabler.min.css">
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="theme.css">
 </head>
 <body>
 <div id="loginView" class="login-split" hidden>
@@ -26,11 +30,11 @@
         <p class="text-secondary">使用管理员分配的账号登录</p>
         <form id="loginForm">
           <div class="mb-3">
-            <label class="form-label" for="loginUsername">用户名</label>
+            <label class="form-label required" for="loginUsername">用户名</label>
             <input id="loginUsername" class="form-control" type="text" autocomplete="username" required>
           </div>
           <div class="mb-3">
-            <label class="form-label" for="loginPassword">密码</label>
+            <label class="form-label required" for="loginPassword">密码</label>
             <input id="loginPassword" class="form-control" type="password" autocomplete="current-password" required>
           </div>
           <div class="mb-3">
@@ -54,24 +58,26 @@
         <span class="brand-sub">Enterprise KB</span>
       </span>
     </div>
-    <button id="newSessionBtn" type="button" class="btn btn-primary w-100">+ 新对话</button>
+    <button id="newSessionBtn" type="button" class="btn btn-primary w-100"><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M8 3v10M3 8h10"/></svg>新对话</button>
     <button id="batchDeleteSessionsBtn" type="button" class="btn btn-outline-danger btn-sm w-100 mt-1">批量删除会话</button>
+    <button id="exportSessionsBtn" type="button" class="btn btn-outline-secondary btn-sm w-100 mt-1">导出问答记录</button>
     <div class="sidebar-section-label">最近对话</div>
     <nav id="sessionList" class="session-list"></nav>
     <div class="sidebar-nav">
-      <button type="button" class="sidebar-link active" data-view="dashboard">总览</button>
-      <button type="button" class="sidebar-link" data-view="chat">智能问答</button>
-      <button type="button" class="sidebar-link" data-view="manage">文档管理</button>
-      <button type="button" class="sidebar-link" data-view="entries" id="entriesNavBtn" hidden>知识条目</button>
-      <button type="button" class="sidebar-link" data-view="faq" id="faqNavBtn" hidden>标准答案</button>
-      <button type="button" class="sidebar-link" data-view="notifications">通知 <span id="notifBadge" class="badge bg-red" hidden></span></button>
-      <button type="button" class="sidebar-link" data-view="approval" id="approvalNavBtn" hidden>审批</button>
-      <button type="button" class="sidebar-link" data-view="miss" id="missNavBtn" hidden>知识盲区</button>
-      <button type="button" class="sidebar-link" data-view="departments" id="deptNavBtn" hidden>部门管理</button>
-      <button type="button" class="sidebar-link" data-view="audit" id="auditNavBtn" hidden>审计日志</button>
-      <button type="button" class="sidebar-link" data-view="admin" id="adminNavBtn" hidden>用户管理</button>
-      <button type="button" class="sidebar-link" data-view="apikeys" id="apikeysNavBtn" hidden>API 密钥</button>
-      <button type="button" class="sidebar-link" data-view="password">改密码</button>
+      <button type="button" class="sidebar-link active" data-view="dashboard"><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>总览</button>
+      <button type="button" class="sidebar-link" data-view="chat"><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h12v8H6l-4 3z"/></svg>智能问答</button>
+      <button type="button" class="sidebar-link" data-view="manage"><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 2h7l3 3v9H3z"/><path d="M10 2v3h3"/></svg>文档管理</button>
+      <button type="button" class="sidebar-link" data-view="entries" id="entriesNavBtn" hidden><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 2h10v12H3z"/><path d="M6 6h4M6 9h4"/></svg>知识条目</button>
+      <button type="button" class="sidebar-link" data-view="faq" id="faqNavBtn" hidden><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M6.5 6a1.5 1.5 0 1 1 2 1.4c-.6.3-1 .7-1 1.6"/><path d="M8 11h.01"/></svg>标准答案</button>
+      <button type="button" class="sidebar-link" data-view="notifications"><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6a4 4 0 0 1 8 0v4l1 2H3l1-2z"/><path d="M6.5 14h3"/></svg>通知 <span id="notifBadge" class="badge bg-red" hidden></span></button>
+      <button type="button" class="sidebar-link" data-view="approval" id="approvalNavBtn" hidden><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8l3 3 7-7"/><circle cx="8" cy="8" r="6"/></svg>审批</button>
+      <button type="button" class="sidebar-link" data-view="miss" id="missNavBtn" hidden><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M8 5v3M8 11h.01"/></svg>知识盲区</button>
+      <button type="button" class="sidebar-link" data-view="departments" id="deptNavBtn" hidden><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="2" width="4" height="3" rx="1"/><rect x="2" y="11" width="4" height="3" rx="1"/><rect x="10" y="11" width="4" height="3" rx="1"/><path d="M8 5v3M4 11v-3h8v3"/></svg>部门管理</button>
+      <button type="button" class="sidebar-link" data-view="audit" id="auditNavBtn" hidden><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 2h8v12H4z"/><path d="M6 5h4M6 8h4M6 11h2"/></svg>审计日志</button>
+      <button type="button" class="sidebar-link" data-view="admin" id="adminNavBtn" hidden><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="5" r="2.5"/><path d="M3 14c0-3 2.5-5 5-5s5 2 5 5"/></svg>用户管理</button>
+      <button type="button" class="sidebar-link" data-view="apikeys" id="apikeysNavBtn" hidden><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="8" r="2.5"/><path d="M7.5 8H14M11 6l2 2-2 2"/></svg>API 密钥</button>
+      <button type="button" class="sidebar-link" data-view="password"><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="7" width="10" height="7" rx="1"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>改密码</button>
+      <button type="button" class="sidebar-link" data-view="starred"><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 2l1.8 3.7 4.2.6-3 3 .7 4.1L8 11.5 4.3 13.4l.7-4.1-3-3 4.2-.6z"/></svg>我的收藏</button>
     </div>
     <div class="sidebar-user">
       <span class="user-avatar" id="userAvatar"></span>
@@ -82,11 +88,12 @@
 
   <main class="main">
     <div class="topbar">
-      <button id="menuBtn" type="button" class="btn btn-outline-secondary btn-sm d-md-none">☰</button>
+      <button id="menuBtn" type="button" class="btn btn-outline-secondary btn-sm d-md-none" aria-label="打开导航" aria-expanded="false"><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 4h12M2 8h12M2 12h12"/></svg></button>
       <span id="viewTitle" class="topbar-title">总览</span>
       <span id="deptBadge" class="badge bg-blue-lt ms-auto" hidden></span>
+      <button id="themeBtn" type="button" class="btn btn-ghost-secondary btn-sm ms-2">☾ 深色</button>
     </div>
-    <div id="message" class="alert alert-warning m-3 mb-0" role="alert" hidden></div>
+    <div id="message" class="alert alert-info m-3 mb-0" role="alert" hidden></div>
 
     <section id="dashboardView" class="page-view">
       <div class="stat-grid">
@@ -196,6 +203,7 @@
         <form id="askForm" class="composer-form">
           <textarea id="question" class="form-control" rows="2" required placeholder="输入问题，Enter 发送，Shift+Enter 换行"></textarea>
           <button type="submit" class="btn btn-primary">发送</button>
+          <button id="stopAskBtn" type="button" class="btn btn-outline-danger" hidden>停止生成</button>
           <button id="searchOnlyBtn" type="button" class="btn btn-outline-secondary">仅搜索</button>
         </form>
       </div>
@@ -211,7 +219,7 @@
             <form id="uploadForm">
               <div class="row g-2 align-items-end">
                 <div class="col-md-6">
-                  <label class="form-label" for="uploadFile">文件（可多选，逐个入库）</label>
+                  <label class="form-label required" for="uploadFile">文件（可多选，逐个入库）</label>
                   <input id="uploadFile" class="form-control" type="file" multiple required>
                 </div>
                 <div class="col-md-3">
@@ -235,6 +243,9 @@
           <div class="card-body">
             <div class="d-flex align-items-center gap-2 mb-3">
               <button id="refreshDocsBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+              <button id="exportDocsBtn" type="button" class="btn btn-ghost-secondary btn-sm">导出 CSV</button>
+              <input id="batchVisibilityInput" class="form-control form-control-sm" style="max-width:140px" placeholder="目标可见性">
+              <button id="batchVisibilityBtn" type="button" class="btn btn-outline-secondary btn-sm">批量改可见性</button>
               <button id="batchDeleteDocsBtn" type="button" class="btn btn-outline-danger btn-sm">批量删除</button>
               <button id="prevPageBtn" type="button" class="btn btn-outline-secondary btn-sm">上一页</button>
               <button id="nextPageBtn" type="button" class="btn btn-outline-secondary btn-sm">下一页</button>
@@ -260,10 +271,12 @@
           <div class="card-body">
             <div class="d-flex align-items-center gap-2 mb-3">
               <button id="refreshApprovalBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+              <button id="batchApproveBtn" type="button" class="btn btn-primary btn-sm">批量通过</button>
+              <button id="batchRejectBtn" type="button" class="btn btn-outline-danger btn-sm">批量驳回</button>
             </div>
             <div class="table-responsive">
               <table id="approvalTable" class="table table-vcenter">
-                <thead><tr><th>文件</th><th>块数</th><th>可见性</th><th>版本</th><th></th></tr></thead>
+                <thead><tr><th></th><th>文件</th><th>块数</th><th>可见性</th><th>版本</th><th>操作</th></tr></thead>
                 <tbody></tbody>
               </table>
             </div>
@@ -282,11 +295,11 @@
             <form id="createDepartmentForm">
               <div class="row g-2 align-items-end">
                 <div class="col-md-3">
-                  <label class="form-label" for="deptCode">部门代号</label>
+                  <label class="form-label required" for="deptCode">部门代号</label>
                   <input id="deptCode" class="form-control" type="text" required placeholder="小写字母、数字、下划线">
                 </div>
                 <div class="col-md-3">
-                  <label class="form-label" for="deptName">部门名称</label>
+                  <label class="form-label required" for="deptName">部门名称</label>
                   <input id="deptName" class="form-control" type="text" required>
                 </div>
                 <div class="col-md-3">
@@ -318,6 +331,7 @@
           <div class="card-body">
             <div class="d-flex align-items-center gap-2 mb-3">
               <button id="refreshAuditBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+              <button id="exportAuditBtn" type="button" class="btn btn-ghost-secondary btn-sm">导出 CSV</button>
               <button id="prevAuditBtn" type="button" class="btn btn-outline-secondary btn-sm">上一页</button>
               <button id="nextAuditBtn" type="button" class="btn btn-outline-secondary btn-sm">下一页</button>
               <span id="auditPageInfo" class="text-secondary"></span>
@@ -343,11 +357,11 @@
             <form id="createUserForm">
               <div class="row g-2 align-items-end">
                 <div class="col-md-3">
-                  <label class="form-label" for="newUsername">用户名</label>
+                  <label class="form-label required" for="newUsername">用户名</label>
                   <input id="newUsername" class="form-control" type="text" required>
                 </div>
                 <div class="col-md-3">
-                  <label class="form-label" for="newPassword">密码</label>
+                  <label class="form-label required" for="newPassword">密码</label>
                   <input id="newPassword" class="form-control" type="password" required minlength="8">
                 </div>
                 <div class="col-md-2">
@@ -413,7 +427,7 @@
             <form id="createApiKeyForm">
               <div class="row g-2 align-items-end">
                 <div class="col-md-4">
-                  <label class="form-label" for="apiKeyName">名字</label>
+                  <label class="form-label required" for="apiKeyName">名字</label>
                   <input id="apiKeyName" class="form-control" type="text" required maxlength="64" placeholder="如：oa-同步">
                 </div>
                 <div class="col-md-3">
@@ -461,7 +475,7 @@
             <form id="entryForm">
               <div class="row g-2">
                 <div class="col-md-4">
-                  <label class="form-label" for="entryTitle">标题</label>
+                  <label class="form-label required" for="entryTitle">标题</label>
                   <input id="entryTitle" class="form-control" type="text" required maxlength="100">
                 </div>
                 <div class="col-md-2">
@@ -477,7 +491,7 @@
                   <input id="entryVisibility" class="form-control" type="text" value="all" placeholder="all 或部门代号">
                 </div>
                 <div class="col-12">
-                  <label class="form-label" for="entryContent">正文</label>
+                  <label class="form-label required" for="entryContent">正文</label>
                   <textarea id="entryContent" class="form-control" rows="8" required placeholder="直接写知识正文，入库后按切块检索"></textarea>
                 </div>
                 <div class="col-12 d-flex gap-2">
@@ -495,6 +509,8 @@
           <div class="card-body">
             <div class="d-flex align-items-center gap-2 mb-3">
               <button id="refreshEntriesBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+              <select id="entryCategoryFilter" class="form-select form-select-sm" style="max-width:150px"><option value="">全部分类</option></select>
+              <select id="entryTagFilter" class="form-select form-select-sm" style="max-width:150px"><option value="">全部标签</option></select>
               <button id="batchDeleteEntriesBtn" type="button" class="btn btn-outline-danger btn-sm">批量删除</button>
               <span id="entriesInfo" class="text-secondary"></span>
             </div>
@@ -520,7 +536,7 @@
             <form id="faqForm">
               <div class="row g-2">
                 <div class="col-md-4">
-                  <label class="form-label" for="faqQuestion">问题</label>
+                  <label class="form-label required" for="faqQuestion">问题</label>
                   <input id="faqQuestion" class="form-control" type="text" required maxlength="200">
                 </div>
                 <div class="col-md-4">
@@ -539,7 +555,7 @@
                   </label>
                 </div>
                 <div class="col-12">
-                  <label class="form-label" for="faqAnswer">答案</label>
+                  <label class="form-label required" for="faqAnswer">答案</label>
                   <textarea id="faqAnswer" class="form-control" rows="4" required></textarea>
                 </div>
                 <div class="col-12 d-flex gap-2">
@@ -581,6 +597,7 @@
             <div class="d-flex align-items-center gap-2 mb-3">
               <input id="missKeyword" class="form-control" type="text" style="max-width:240px" placeholder="按问题过滤">
               <button id="refreshMissBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+              <button id="exportMissBtn" type="button" class="btn btn-ghost-secondary btn-sm">导出 CSV</button>
               <span class="text-secondary">把问得多又答不上的问题补进知识库或标准答案</span>
             </div>
             <div class="table-responsive">
@@ -604,11 +621,11 @@
             <form id="changePasswordForm">
               <div class="row g-2 align-items-end">
                 <div class="col-md-5">
-                  <label class="form-label" for="oldPassword">旧密码</label>
+                  <label class="form-label required" for="oldPassword">旧密码</label>
                   <input id="oldPassword" class="form-control" type="password" required>
                 </div>
                 <div class="col-md-5">
-                  <label class="form-label" for="newPassword2">新密码</label>
+                  <label class="form-label required" for="newPassword2">新密码</label>
                   <input id="newPassword2" class="form-control" type="password" required minlength="8">
                 </div>
                 <div class="col-md-2">
@@ -637,7 +654,7 @@
             </div>
             <form id="totpEnableForm" class="row g-2 align-items-end">
               <div class="col-md-6">
-                <label class="form-label" for="totpCode">验证码</label>
+                <label class="form-label required" for="totpCode">验证码</label>
                 <input id="totpCode" class="form-control" type="text" inputmode="numeric" required>
               </div>
               <div class="col-md-3">
@@ -647,7 +664,7 @@
           </div>
           <form id="totpDisableForm" class="row g-2 align-items-end mt-3">
             <div class="col-md-6">
-              <label class="form-label" for="totpDisablePassword">关闭双因素（输入密码确认）</label>
+              <label class="form-label required" for="totpDisablePassword">关闭双因素（输入密码确认）</label>
               <input id="totpDisablePassword" class="form-control" type="password" required>
             </div>
             <div class="col-md-3">
@@ -657,9 +674,45 @@
         </div>
       </div>
     </section>
+
+    <section id="starredView" class="page-view" hidden>
+      <div class="manage-inner">
+        <div class="card">
+          <div class="card-header d-flex align-items-center justify-content-between">
+            <h2 class="card-title">我的收藏</h2>
+            <button id="refreshStarredBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+          </div>
+          <div class="card-body">
+            <div id="starredList"></div>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
+  <div id="sidebarBackdrop" class="sidebar-backdrop"></div>
 </div>
+
+<div id="previewDrawer" class="drawer" hidden>
+  <div class="drawer-header">
+    <h2 id="previewTitle" class="drawer-title"></h2>
+    <button id="previewCloseBtn" type="button" class="btn btn-ghost-secondary btn-sm">关闭</button>
+  </div>
+  <pre id="previewText" class="drawer-body"></pre>
+</div>
+
+<div id="diffDrawer" class="drawer drawer-wide" hidden>
+  <div class="drawer-header">
+    <h2 id="diffTitle" class="drawer-title"></h2>
+    <button id="diffCloseBtn" type="button" class="btn btn-ghost-secondary btn-sm">关闭</button>
+  </div>
+  <div class="drawer-body">
+    <div class="diff-legend"><span class="diff-old">旧版</span><span class="diff-new">当前版</span></div>
+    <div id="diffBody" class="diff-body"></div>
+  </div>
+</div>
+
 <script src="features.js"></script>
 <script src="app.js"></script>
+<script src="ui-enhance.js"></script>
 </body>
 </html>

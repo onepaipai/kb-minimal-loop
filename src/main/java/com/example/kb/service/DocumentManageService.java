@@ -162,10 +162,23 @@ public class DocumentManageService {
 
     /** 在线文本预览：按块号顺序拼回当前版全文（切块带了章节前缀，非原始排版）。 */
     public String previewText(String source) {
-        List<String> parts = jdbcTemplate.queryForList(
-                "SELECT COALESCE(text, '') FROM " + TABLE + " WHERE metadata->>'source' = ? "
-                        + "AND COALESCE(metadata->>'status','approved') <> 'superseded' "
-                        + "ORDER BY CAST(NULLIF(metadata->>'chunk_index','') AS INTEGER)", String.class, source);
+        return previewText(source, null);
+    }
+
+    /** 指定版本取全文：version 为 null 取当前版；版本号在块 metadata 里，旧版标了 superseded 后仍可按版本读。 */
+    public String previewText(String source, Integer version) {
+        StringBuilder sql = new StringBuilder("SELECT COALESCE(text, '') FROM " + TABLE
+                + " WHERE metadata->>'source' = ? ");
+        List<Object> params = new ArrayList<>();
+        params.add(source);
+        if (version == null) {
+            sql.append("AND COALESCE(metadata->>'status','approved') <> 'superseded' ");
+        } else {
+            sql.append("AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ? ");
+            params.add(version);
+        }
+        sql.append("ORDER BY CAST(NULLIF(metadata->>'chunk_index','') AS INTEGER)");
+        List<String> parts = jdbcTemplate.queryForList(sql.toString(), String.class, params.toArray());
         return String.join("\n\n", parts);
     }
 
@@ -200,6 +213,11 @@ public class DocumentManageService {
      */
     public void attachTagsAndCategory(String source, int version, String category, String tags) {
         documentVersionQueryHelper.attachTagsAndCategory(source, version, category, tags);
+    }
+
+    /** 改当前版可见性（批量改可见性用）；旧版不动，回滚后仍是原来的可见性。 */
+    public int updateVisibility(String source, String visibility) {
+        return documentVersionQueryHelper.updateVisibility(source, visibility);
     }
 
     /** null 或纯空白返回 null，其余返回去空格后的值。 */

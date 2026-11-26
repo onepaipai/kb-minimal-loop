@@ -66,6 +66,11 @@ public class NotificationService {
      * 上传人就是审批人本人时不发。
      */
     public void notifyDecision(String source, String actorUsername, boolean approved) {
+        notifyDecision(source, actorUsername, approved, null);
+    }
+
+    /** 带驳回理由的审批结果通知：理由拼进 body，驳回时上传人能看到原因。 */
+    public void notifyDecision(String source, String actorUsername, boolean approved, String reason) {
         try {
             List<String> uploaders = jdbcTemplate.query(
                     "SELECT username FROM ingest_job WHERE source = ? ORDER BY created_at DESC LIMIT 1",
@@ -73,10 +78,13 @@ public class NotificationService {
             if (uploaders.isEmpty() || uploaders.get(0).equals(actorUsername)) {
                 return;
             }
+            String body = "文档「" + source + "」"
+                    + (approved ? "已通过审批，问答可以查到它了。" : "被驳回了，请修改后重新上传。");
+            if (!approved && reason != null && !reason.isBlank()) {
+                body = body + " 驳回原因：" + reason.trim();
+            }
             create(uploaders.get(0), approved ? TYPE_APPROVED : TYPE_REJECTED,
-                    approved ? "文档已通过审批" : "文档被驳回",
-                    "文档「" + source + "」" + (approved ? "已通过审批，问答可以查到它了。" : "被驳回了，请修改后重新上传。"),
-                    source);
+                    approved ? "文档已通过审批" : "文档被驳回", body, source);
         } catch (Exception e) {
             log.warn("审批结果通知发送失败（审批本身已成功）：{}", e.toString());
         }

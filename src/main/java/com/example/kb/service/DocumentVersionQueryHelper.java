@@ -242,6 +242,14 @@ final class DocumentVersionQueryHelper {
                 params.toArray());
     }
 
+    /** 改当前版可见性：只动未被 superseded 的现行块，旧版不动（回滚后仍是原来的可见性）。 */
+    int updateVisibility(String source, String visibility) {
+        return jdbcTemplate.update("UPDATE " + TABLE + " SET metadata = "
+                + "jsonb_set(metadata, '{visibility}', to_jsonb(?::text)) "
+                + "WHERE metadata->>'source' = ? AND COALESCE(metadata->>'status','approved') <> 'superseded'",
+                visibility, source);
+    }
+
     int purgeOldSuperseded(int keep) {
         return jdbcTemplate.update("DELETE FROM " + TABLE + " c "
                 + "WHERE COALESCE(c.metadata->>'status', 'approved') = 'superseded' "

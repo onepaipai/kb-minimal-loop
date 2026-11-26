@@ -8,6 +8,8 @@ import java.util.Set;
 import com.example.kb.common.Visibility;
 import com.example.kb.dto.DeleteDocumentResponse;
 import com.example.kb.dto.DocumentBatchDeleteRequest;
+import com.example.kb.dto.DocumentBatchReviewRequest;
+import com.example.kb.dto.DocumentBatchVisibilityRequest;
 import com.example.kb.dto.DocumentListResponse;
 import com.example.kb.service.AuditService;
 import com.example.kb.security.DepartmentScope;
@@ -115,26 +117,80 @@ public class DocumentController {
     @PostMapping("/document/approve")
     public Map<String, Object> approveDocument(@RequestParam("source") String source) {
         UserPrincipal user = DepartmentScope.requireCurrentUser();
-        String visibility = requireDocumentVisibility(source);
-        DepartmentScope.requireCanApprove(user, visibility);
-        int chunks = documentManageService.setStatus(source, "approved");
-        knowledgeEntryService.syncStatusBySource(source, "approved");
-        auditService.record(user.username(), "APPROVE", source, "chunks=" + chunks);
-        notificationService.notifyDecision(source, user.username(), true);
-        return Map.of("source", source, "status", "approved", "chunks", chunks);
+        DepartmentScope.requireCanApprove(user, requireDocumentVisibility(source));
+        return review(source, "approved", null, user);
     }
 
-    /** 驳回文档：整篇文档的块统一改成已驳回，问答查不到，删了可重新上传；条目来源同步条目行状态。 */
+    /** 驳回文档：可带 reason，理由写进审计与上传人通知；条目来源同步条目行状态。 */
     @PostMapping("/document/reject")
-    public Map<String, Object> rejectDocument(@RequestParam("source") String source) {
+    public Map<String, Object> rejectDocument(@RequestParam("source") String source,
+                                              @RequestParam(value = "reason", required = false) String reason) {
         UserPrincipal user = DepartmentScope.requireCurrentUser();
-        String visibility = requireDocumentVisibility(source);
-        DepartmentScope.requireCanApprove(user, visibility);
-        int chunks = documentManageService.setStatus(source, "rejected");
-        knowledgeEntryService.syncStatusBySource(source, "rejected");
-        auditService.record(user.username(), "REJECT", source, "chunks=" + chunks);
-        notificationService.notifyDecision(source, user.username(), false);
-        return Map.of("source", source, "status", "rejected", "chunks", chunks);
+        DepartmentScope.requireCanApprove(user, requireDocumentVisibility(source));
+        return review(source, "rejected", reason, user);
+    }
+
+    /** 单条审批的公共执行：改状态、同步条目、记审计（含驳回理由）、发通知。 */
+    private Map<String, Object> review(String source, String status, String reason, UserPrincipal user) {
+        int chunks = documentManageService.setStatus(source, status);
+        knowledgeEntryService.syncStatusBySource(source, status);
+        String detail = "chunks=" + chunks;
+        if (reason != null && !reason.isBlank()) {
+            detail = detail + ",reason=" + reason.trim();
+        }
+        auditService.record(user.username(), "approved".equals(status) ? "APPROVE" : "REJECT", source, detail);
+        notificationService.notifyDecision(source, user.username(), "approved".equals(status), reason);
+        return Map.of("source", source, "status", status, "chunks", chunks);
+    }
+
+    /** 批量审批：先统一校验全部权限，任一越权整体 403；再逐条走单条审批（非原子）。 */
+    @PostMapping("/document/batch-review")
+    public Map<String, Object> batchReview(@RequestBody DocumentBatchReviewRequest request) {
+        UserPrincipal user = DepartmentScope.requireCurrentUser();
+        List<String> sources = requireSources(request.getSources());
+        if (request.getStatus() == null || !Set.of("approved", "rejected").contains(request.getStatus())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "status 只允许 approved 或 rejected");
+        }
+        for (String source : sources) {
+            DepartmentScope.requireCanApprove(user, requireDocumentVisibility(source));
+        }
+        List<String> reviewed = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+        for (String source : sources) {
+            try {
+                review(source, request.getStatus(), request.getReason(), user);
+                reviewed.add(source);
+            } catch (Exception e) {
+                failed.add(source + ": " + e.getMessage());
+            }
+        }
+        return Map.of("requested", sources.size(), "reviewed", reviewed, "failed", failed);
+    }
+
+    /** 批量改可见性：先统一校验全部权限与新代号合法性，任一越权整体 403；再逐条改现行块（非原子）。 */
+    @PostMapping("/document/batch-visibility")
+    public Map<String, Object> batchVisibility(@RequestBody DocumentBatchVisibilityRequest request) {
+        UserPrincipal user = DepartmentScope.requireCurrentUser();
+        List<String> sources = requireSources(request.getSources());
+        if (request.getVisibility() == null || request.getVisibility().isBlank()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "visibility 不能为空");
+        }
+        String visibility = Visibility.normalize(request.getVisibility());
+        for (String source : sources) {
+            DepartmentScope.requireCanApprove(user, requireDocumentVisibility(source));
+        }
+        List<String> updated = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+        for (String source : sources) {
+            try {
+                int chunks = documentManageService.updateVisibility(source, visibility);
+                auditService.record(user.username(), "VISIBILITY", source, "visibility=" + visibility + ",chunks=" + chunks);
+                updated.add(source);
+            } catch (Exception e) {
+                failed.add(source + ": " + e.getMessage());
+            }
+        }
+        return Map.of("requested", sources.size(), "updated", updated, "failed", failed);
     }
 
     /** 回滚到指定旧版：目标版恢复成被替换之前的状态，当前版改成 superseded；条目来源按恢复后的状态同步。 */
@@ -178,12 +234,14 @@ public class DocumentController {
                 .body(blob.bytes());
     }
 
-    /** 在线文本预览：按块号拼回当前版全文（不含原始排版，仅正文）。 */
+    /** 在线文本预览：按块号拼回全文；传 version 可取指定旧版，供版本对比。 */
     @GetMapping("/document/preview")
-    public Map<String, Object> preview(@RequestParam("source") String source) {
+    public Map<String, Object> preview(@RequestParam("source") String source,
+                                       @RequestParam(value = "version", required = false) Integer version) {
         UserPrincipal user = DepartmentScope.requireCurrentUser();
         requireCanRead(user, requireDocumentVisibility(source));
-        return Map.of("source", source, "text", documentManageService.previewText(source));
+        return Map.of("source", source, "version", version == null ? "current" : version,
+                "text", documentManageService.previewText(source, version));
     }
 
     /** 读权限：管理员或文档 all / 本人部门可见；部门管理员也能读本部门。 */
@@ -203,10 +261,17 @@ public class DocumentController {
 
     /** 批量入参校验：列表不能为空、不能超 50 条，去空白后保序去重。 */
     private List<String> requireSources(DocumentBatchDeleteRequest request) {
-        if (request == null || request.getSources() == null || request.getSources().isEmpty()) {
+        if (request == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "sources 不能为空");
         }
-        List<String> sources = request.getSources().stream()
+        return requireSources(request.getSources());
+    }
+
+    private List<String> requireSources(List<String> raw) {
+        if (raw == null || raw.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "sources 不能为空");
+        }
+        List<String> sources = raw.stream()
                 .filter(source -> source != null && !source.isBlank())
                 .map(String::trim)
                 .distinct()

@@ -168,6 +168,12 @@ public class KnowledgeEntryService {
      */
     public List<KnowledgeEntryItem> list(String department, String status, boolean includePending,
                                          String callerUsername) {
+        return list(department, status, includePending, callerUsername, null, null);
+    }
+
+    /** 带分类/标签筛选的清单：category 精确匹配，tags 用逗号分隔后任一命中（LIKE）。 */
+    public List<KnowledgeEntryItem> list(String department, String status, boolean includePending,
+                                         String callerUsername, String category, String tag) {
         StringBuilder where = new StringBuilder();
         List<Object> params = new ArrayList<>();
         if (department == null) {
@@ -195,6 +201,14 @@ public class KnowledgeEntryService {
             params.add(callerUsername);
         } else {
             where.append(" AND status = 'approved'");
+        }
+        if (category != null && !category.isBlank()) {
+            where.append(" AND category = ?");
+            params.add(category.trim());
+        }
+        if (tag != null && !tag.isBlank()) {
+            where.append(" AND (',' || COALESCE(tags, '') || ',') LIKE ?");
+            params.add("%," + tag.trim() + ",%");
         }
         params.add(LIST_LIMIT);
         return jdbcTemplate.query("SELECT id, title, source, category, tags, visibility, status, username, "

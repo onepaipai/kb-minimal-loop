@@ -39,8 +39,14 @@ public class ChatSessionService {
     public record SessionItem(String id, String title, OffsetDateTime updatedAt) {
     }
 
-    /** 消息回放条目：user / assistant，assistant 带 refs（引用命中，JSONB 存回）。 */
-    public record MessageItem(String role, String content, List<ReferenceHit> refs, OffsetDateTime createdAt) {
+    /** 消息回放条目：id 供收藏/删除，user / assistant，assistant 带 refs（引用命中，JSONB 存回）。 */
+    public record MessageItem(String id, String role, String content, List<ReferenceHit> refs,
+                              boolean starred, OffsetDateTime createdAt) {
+    }
+
+    /** 收藏条目：一条助手回答及其所属会话、来源问题。 */
+    public record StarredItem(String id, String sessionId, String content, List<ReferenceHit> refs,
+                              OffsetDateTime createdAt) {
     }
 
     /**
@@ -106,13 +112,37 @@ public class ChatSessionService {
     /** 某个会话的消息（只查自己的）：取最新的 200 条，按时间正序返回。 */
     public List<MessageItem> messages(String username, String sessionId) {
         List<MessageItem> messages = jdbcTemplate.query(
-                "SELECT role, content, refs, created_at FROM chat_message "
+                "SELECT id, role, content, refs, starred, created_at FROM chat_message "
                         + "WHERE username = ? AND session_id = ? ORDER BY created_at DESC LIMIT " + MESSAGE_LIMIT,
-                (rs, rowNum) -> new MessageItem(rs.getString("role"), rs.getString("content"),
-                        fromJson(rs.getString("refs")), rs.getObject("created_at", OffsetDateTime.class)),
+                (rs, rowNum) -> new MessageItem(rs.getString("id"), rs.getString("role"), rs.getString("content"),
+                        fromJson(rs.getString("refs")), rs.getBoolean("starred"),
+                        rs.getObject("created_at", OffsetDateTime.class)),
                 username, sessionId.trim());
         java.util.Collections.reverse(messages);
         return messages;
+    }
+
+    /** 删除单条消息：按 username + id 隔离，删自己的；返回是否确有删除。 */
+    public boolean deleteMessage(String username, UUID messageId) {
+        return jdbcTemplate.update("DELETE FROM chat_message WHERE username = ? AND id = ?",
+                username, messageId) > 0;
+    }
+
+    /** 设置某条消息的收藏标记：只改自己的消息。 */
+    public boolean setStarred(String username, UUID messageId, boolean starred) {
+        return jdbcTemplate.update("UPDATE chat_message SET starred = ? WHERE username = ? AND id = ?",
+                starred, username, messageId) > 0;
+    }
+
+    /** 收藏清单：最近收藏的 100 条助手回答（跨会话）。 */
+    public List<StarredItem> starred(String username) {
+        return jdbcTemplate.query(
+                "SELECT id, session_id, content, refs, created_at FROM chat_message "
+                        + "WHERE username = ? AND starred = TRUE AND role = 'assistant' "
+                        + "ORDER BY created_at DESC LIMIT 100",
+                (rs, rowNum) -> new StarredItem(rs.getString("id"), rs.getString("session_id"),
+                        rs.getString("content"), fromJson(rs.getString("refs")),
+                        rs.getObject("created_at", OffsetDateTime.class)), username);
     }
 
     /** 删除会话与它的全部消息：返回会话是否存在。 */

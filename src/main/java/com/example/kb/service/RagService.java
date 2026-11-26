@@ -21,7 +21,6 @@ import dev.langchain4j.model.chat.StreamingChatModel;
 import dev.langchain4j.model.chat.response.ChatResponse;
 import dev.langchain4j.model.chat.response.StreamingChatResponseHandler;
 import dev.langchain4j.model.embedding.EmbeddingModel;
-import dev.langchain4j.model.output.Response;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.filter.Filter;
 import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
@@ -35,8 +34,8 @@ import org.springframework.stereotype.Service;
 @Service
 public class RagService {
 
-    /** 每个会话最多保留的对话消息条数（约 10 轮） */
-    private static final int MAX_MEMORY_MESSAGES = 20;
+    /** 每个会话最多保留的对话消息条数（约 3 轮）：少带历史，减少每轮发给模型的上下文与首字延迟 */
+    private static final int MAX_MEMORY_MESSAGES = 6;
     /** 检索无命中时的固定回答：不调模型，保证每次都一样，也不给模型编造的机会 */
     static final String NOT_FOUND_ANSWER = "资料里没找到";
 
@@ -47,7 +46,6 @@ public class RagService {
     public record AskScope(String username, String department) {
     }
 
-    private final EmbeddingModel embeddingModel;
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final ChatModel chatModel;
     private final StreamingChatModel streamingChatModel;
@@ -56,12 +54,12 @@ public class RagService {
     private final FaqService faqService;
     private final QuestionMissService questionMissService;
     private final ChatSessionService chatSessionService;
+    private final QueryEmbeddingCache queryEmbeddingCache;
 
     public RagService(EmbeddingModel embeddingModel, EmbeddingStore<TextSegment> embeddingStore,
                       ChatModel chatModel, StreamingChatModel streamingChatModel, ChatMemoryStore chatMemoryStore,
                       HybridSearchService hybridSearchService, FaqService faqService,
                       QuestionMissService questionMissService, ChatSessionService chatSessionService) {
-        this.embeddingModel = embeddingModel;
         this.embeddingStore = embeddingStore;
         this.chatModel = chatModel;
         this.streamingChatModel = streamingChatModel;
@@ -70,6 +68,7 @@ public class RagService {
         this.faqService = faqService;
         this.questionMissService = questionMissService;
         this.chatSessionService = chatSessionService;
+        this.queryEmbeddingCache = new QueryEmbeddingCache(embeddingModel);
     }
 
     /** 流式问答的事件回调：Controller 接到 SseEmitter 上，顺序为 sources → token* → done / onError。 */
@@ -223,7 +222,7 @@ public class RagService {
      * searchHits 与 prepare 共用，改权限或检索规则只改这一处。
      */
     private List<HybridSearchService.RetrievedChunk> retrieveChunks(AskRequest request, AskScope scope) {
-        Response<Embedding> embeddingResponse = embeddingModel.embed(request.getQuestion());
+        Embedding queryEmbedding = queryEmbeddingCache.embed(request.getQuestion());
         int maxResults = RagPromptBuilder.MAX_RESULTS;
         if (request.getMaxResults() != null) {
             maxResults = request.getMaxResults();
@@ -243,7 +242,7 @@ public class RagService {
                     .isIn(request.getSources().toArray(new String[0])));
         }
         // 老块没有 status 字段时须先跑回填 SQL（见 docs/architecture.md），否则向量路查不到
-        return hybridSearchService.search(embeddingResponse.content(), filter, request.getQuestion(), department,
+        return hybridSearchService.search(queryEmbedding, filter, request.getQuestion(), department,
                 request.getSources(), maxResults, minScore);
     }
 
