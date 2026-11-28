@@ -394,7 +394,7 @@ curl -H "Authorization: Bearer $TOKEN" \
 # 返回 {"source":"请假制度.txt","text":"..."}
 ```
 
-`GET /api/documents` 的每条记录带 `hasBlob`：为 true 表示该篇有原件可下载。下载/预览都按文档 visibility 与调用者部门做读权限校验（管理员全部、部门管理员本部门、普通用户本部门与全员可见），越权返回 403；版本不存在或没有原件返回 404。
+`GET /api/documents` 的每条记录带 `hasBlob`：为 true 表示该篇有原件可下载。下载/预览当前版按文档 visibility、审批状态与调用者部门做读权限校验（管理员全部、部门管理员本部门、普通用户本部门与全员可见）；历史版本只允许管理员读取，越权返回 403；版本不存在或没有原件返回 404。
 
 ## POST /api/search —— 仅检索（不生成答案）
 

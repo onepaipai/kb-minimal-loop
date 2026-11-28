@@ -1,5 +1,9 @@
 package com.example.kb.service;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.UUID;
 
@@ -22,8 +26,12 @@ public class FeedbackService {
     }
 
     public void submit(String username, String question, String answer, boolean helpful) {
-        jdbcTemplate.update("INSERT INTO feedback(id, username, question, answer, helpful) VALUES (?, ?, ?, ?, ?)",
-                UUID.randomUUID(), username, truncate(question), truncate(answer), helpful);
+        String storedQuestion = truncate(question);
+        String storedAnswer = truncate(answer);
+        String key = feedbackKey(username, storedQuestion, storedAnswer);
+        jdbcTemplate.update("INSERT INTO feedback(id, username, question, answer, helpful, feedback_key) "
+                        + "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (feedback_key) DO UPDATE SET helpful = EXCLUDED.helpful, "
+                        + "created_at = now()", UUID.randomUUID(), username, storedQuestion, storedAnswer, helpful, key);
     }
 
     public FeedbackStats stats() {
@@ -45,5 +53,15 @@ public class FeedbackService {
             return "";
         }
         return text.length() > MAX_TEXT_LENGTH ? text.substring(0, MAX_TEXT_LENGTH) : text;
+    }
+
+    private static String feedbackKey(String username, String question, String answer) {
+        try {
+            String value = username + "\u0000" + question + "\u0000" + answer;
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
+                    .digest(value.getBytes(StandardCharsets.UTF_8)));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 不可用", e);
+        }
     }
 }

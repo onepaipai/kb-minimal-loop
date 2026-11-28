@@ -9,6 +9,7 @@ import com.example.kb.service.AuditService;
 import com.example.kb.security.DepartmentScope;
 import com.example.kb.security.UserPrincipal;
 import com.example.kb.security.UserService;
+import com.example.kb.security.RefreshTokenService;
 import com.example.kb.service.FeedbackService;
 import com.example.kb.service.QuestionMissService;
 import org.springframework.http.HttpStatus;
@@ -32,13 +33,16 @@ import org.springframework.web.server.ResponseStatusException;
 public class AdminController {
 
     private final UserService userService;
+    private final RefreshTokenService refreshTokenService;
     private final AuditService auditService;
     private final FeedbackService feedbackService;
     private final QuestionMissService questionMissService;
 
-    public AdminController(UserService userService, AuditService auditService, FeedbackService feedbackService,
+    public AdminController(UserService userService, RefreshTokenService refreshTokenService,
+                           AuditService auditService, FeedbackService feedbackService,
                            QuestionMissService questionMissService) {
         this.userService = userService;
+        this.refreshTokenService = refreshTokenService;
         this.auditService = auditService;
         this.feedbackService = feedbackService;
         this.questionMissService = questionMissService;
@@ -75,6 +79,7 @@ public class AdminController {
     public UserService.UserSummary updateUser(@PathVariable String username, @RequestBody UpdateUserRequest request) {
         UserPrincipal caller = DepartmentScope.requireCurrentUser();
         UserService.UserSummary updated = userService.updateUser(username, request.getRole(), request.getDepartment());
+        refreshTokenService.revokeAllForUser(username);
         auditService.record(caller.username(), "UPDATE_USER", updated.username(),
                 "role=" + updated.role() + " department=" + updated.department());
         return updated;

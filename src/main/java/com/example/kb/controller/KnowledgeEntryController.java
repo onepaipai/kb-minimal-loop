@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 
+import com.example.kb.common.RequestValidation;
 import com.example.kb.common.Visibility;
 import com.example.kb.dto.KnowledgeBatchDeleteRequest;
 import com.example.kb.dto.KnowledgeEntryCreateRequest;
@@ -43,12 +44,16 @@ public class KnowledgeEntryController {
     /** 新建知识条目：标题与正文必填；普通用户不能写（与上传同权限），编辑写的待审批。 */
     @PostMapping
     public KnowledgeEntryService.KnowledgeEntrySaved create(@RequestBody KnowledgeEntryCreateRequest request) {
+        if (request == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
+        }
         if (request.getTitle() == null || request.getTitle().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "标题不能为空");
         }
         if (request.getContent() == null || request.getContent().isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "正文不能为空");
         }
+        RequestValidation.validateEntry(request.getTitle(), request.getContent(), request.getCategory(), request.getTags());
         UserPrincipal user = DepartmentScope.requireCurrentUser();
         return knowledgeEntryService.create(user, request.getTitle(), request.getContent(),
                 request.getCategory(), request.getTags(), request.getVisibility());
@@ -90,6 +95,10 @@ public class KnowledgeEntryController {
     @PutMapping("/{id}")
     public KnowledgeEntryService.KnowledgeEntrySaved update(@PathVariable UUID id,
                                                             @RequestBody KnowledgeEntryUpdateRequest request) {
+        if (request == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
+        }
+        RequestValidation.validateEntry(null, request.getContent(), request.getCategory(), request.getTags());
         UserPrincipal user = DepartmentScope.requireCurrentUser();
         return knowledgeEntryService.update(id, user, request.getContent(), request.getCategory(),
                 request.getTags(), request.getVisibility());

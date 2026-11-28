@@ -15,6 +15,8 @@ import java.util.regex.Pattern;
 public final class CitationValidator {
 
     private static final Pattern CITATION = Pattern.compile("\\[(\\d+)\\]");
+    private static final Set<String> STOP_WORDS = Set.of("可以", "不能", "需要", "如果", "因为", "所以", "我们", "你们",
+            "系统", "用户", "人员", "相关", "资料", "内容", "问题", "进行", "这个", "那个", "以及", "或者", "是否");
 
     private CitationValidator() {
     }
@@ -83,9 +85,13 @@ public final class CitationValidator {
             if (containsHan(part)) {
                 addBigrams(words, part);
             } else if (part.length() >= 2) {
-                words.add(part.toLowerCase(Locale.ROOT));
+                String normalized = part.toLowerCase(Locale.ROOT);
+                if (!STOP_WORDS.contains(normalized)) {
+                    words.add(normalized);
+                }
             }
         }
+        words.removeAll(STOP_WORDS);
         return words;
     }
 

@@ -90,7 +90,7 @@ public class IngestController {
                 prep.lowerName().endsWith(JAVA_SUFFIX), prep.visibility(), prep.status(), prep.user().username());
         auditService.record(prep.user().username(), "UPLOAD", prep.fileName(),
                 "async jobId=" + job.id() + " visibility=" + prep.visibility() + " status=" + prep.status());
-        notifyIfPending(prep);
+        // 异步任务只有真正入库并发布成功后才通知审批，避免失败任务制造假待审批通知。
         return job;
     }
 

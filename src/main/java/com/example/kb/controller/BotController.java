@@ -2,6 +2,7 @@ package com.example.kb.controller;
 
 import java.util.Locale;
 
+import com.example.kb.common.RequestValidation;
 import com.example.kb.dto.AskRequest;
 import com.example.kb.dto.AskResponse;
 import com.example.kb.dto.BotAskRequest;
@@ -42,6 +43,9 @@ public class BotController {
     /** 机器人问答：与 /api/ask 同一套检索、标准答案与盲区记录；部门权限按 Key 主人的账号规则算。 */
     @PostMapping("/ask")
     public Object ask(@RequestBody BotAskRequest request) {
+        if (request == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "请求体不能为空");
+        }
         if (request.getPlatform() != null) {
             request.setPlatform(request.getPlatform().trim().toLowerCase(Locale.ROOT));
         }
@@ -54,6 +58,7 @@ public class BotController {
         auditService.record(user.username(), "BOT_ASK", request.getPlatform(), question);
         AskRequest askRequest = new AskRequest();
         askRequest.setQuestion(question);
+        RequestValidation.validateAsk(askRequest);
         AskResponse response = ragService.ask(askRequest, scope);
         if (PLATFORM_DINGTALK.equals(request.getPlatform()) || PLATFORM_WECOM.equals(request.getPlatform())) {
             return BotReply.ofText(response.getAnswer());

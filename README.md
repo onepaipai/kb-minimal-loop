@@ -12,7 +12,7 @@
 ## 快速开始
 
 1. 按 [部署](docs/deployment.md) 建好 Neon 库，拿到 DeepSeek 与 DashScope 的 Key。
-2. 设环境变量（见 [部署](docs/deployment.md)，模型与数据库 5 个必填，`JWT_SECRET` 与 `ADMIN_PASSWORD` 建议配上），`mvn clean spring-boot:run`。
+2. 设环境变量（见 [部署](docs/deployment.md)，模型、数据库和至少 32 字符的 `JWT_SECRET` 必填，`ADMIN_PASSWORD` 建议配上），`mvn clean spring-boot:run`。
 3. 冒烟（先登录拿 Token，见 [接口](docs/api.md)；或直接打开 `http://localhost:8080/` 用前端页面操作）：
 
 ```bash

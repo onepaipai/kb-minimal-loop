@@ -4,8 +4,11 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import dev.langchain4j.data.embedding.Embedding;
 import dev.langchain4j.data.segment.TextSegment;
@@ -14,6 +17,8 @@ import dev.langchain4j.store.embedding.EmbeddingSearchRequest;
 import dev.langchain4j.store.embedding.EmbeddingSearchResult;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.filter.Filter;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -41,18 +46,22 @@ public class HybridSearchService {
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final JdbcTemplate jdbcTemplate;
     private final RerankService rerankService;
-    /** 向量路与关键词路互不依赖，并发发起砍掉一次串行 DB 往返；守护线程池随 JVM 退出 */
-    private final Executor searchExecutor = Executors.newFixedThreadPool(2, runnable -> {
-        Thread thread = new Thread(runnable, "hybrid-search-");
-        thread.setDaemon(true);
-        return thread;
-    });
+    private final Executor searchExecutor;
 
+    /** 供 Spring 使用的有界线程池；测试仍可使用三参数构造器。 */
+    @Autowired
     public HybridSearchService(EmbeddingStore<TextSegment> embeddingStore, JdbcTemplate jdbcTemplate,
-                               RerankService rerankService) {
+                               RerankService rerankService,
+                               @Qualifier("hybridSearchExecutor") Executor searchExecutor) {
         this.embeddingStore = embeddingStore;
         this.jdbcTemplate = jdbcTemplate;
         this.rerankService = rerankService;
+        this.searchExecutor = searchExecutor;
+    }
+
+    public HybridSearchService(EmbeddingStore<TextSegment> embeddingStore, JdbcTemplate jdbcTemplate,
+                               RerankService rerankService) {
+        this(embeddingStore, jdbcTemplate, rerankService, Executors.newFixedThreadPool(2));
     }
 
     public record RetrievedChunk(String text, String source, double score) {
@@ -69,12 +78,26 @@ public class HybridSearchService {
                 () -> searchVector(queryEmbedding, filter, maxResults, minScore), searchExecutor);
         CompletableFuture<List<RetrievedChunk>> keywordFuture = CompletableFuture.supplyAsync(
                 () -> searchKeyword(question, department, sources), searchExecutor);
-        List<RetrievedChunk> vectorRanked = vectorFuture.join();
-        List<RetrievedChunk> keywordRanked = keywordFuture.join();
+        List<RetrievedChunk> vectorRanked = awaitSearch(vectorFuture);
+        List<RetrievedChunk> keywordRanked = awaitSearch(keywordFuture);
         // 重排开启时融合多取候选再重排取前 N；关闭时直接取前 N，重排服务原样返回，不多一次调用
         int fuseLimit = rerankService.isEnabled() ? RERANK_CANDIDATES : maxResults;
         List<RetrievedChunk> fused = fuse(vectorRanked, keywordRanked, fuseLimit);
         return rerankService.rerank(question, fused, maxResults);
+    }
+
+    private List<RetrievedChunk> awaitSearch(CompletableFuture<List<RetrievedChunk>> future) {
+        try {
+            return future.get(5, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            future.cancel(true);
+            return List.of();
+        } catch (ExecutionException | TimeoutException e) {
+            future.cancel(true);
+            log.warn("混合检索一路失败，使用另一检索路结果：{}", e.toString());
+            return List.of();
+        }
     }
 
     private List<RetrievedChunk> searchVector(Embedding queryEmbedding, Filter filter, int maxResults, double minScore) {

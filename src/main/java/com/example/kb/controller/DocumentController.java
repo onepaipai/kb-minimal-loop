@@ -87,7 +87,7 @@ public class DocumentController {
     @PostMapping("/document/approve")
     public Map<String, Object> approveDocument(@RequestParam("source") String source) {
         UserPrincipal user = DepartmentScope.requireCurrentUser();
-        DepartmentScope.requireCanApprove(user, requireDocumentVisibility(source));
+        DepartmentScope.requireCanApprove(user, requireCandidateVisibility(source));
         return documentBatchService.reviewOne(source, "approved", null, user);
     }
 
@@ -96,7 +96,7 @@ public class DocumentController {
     public Map<String, Object> rejectDocument(@RequestParam("source") String source,
                                               @RequestParam(value = "reason", required = false) String reason) {
         UserPrincipal user = DepartmentScope.requireCurrentUser();
-        DepartmentScope.requireCanApprove(user, requireDocumentVisibility(source));
+        DepartmentScope.requireCanApprove(user, requireCandidateVisibility(source));
         return documentBatchService.reviewOne(source, "rejected", reason, user);
     }
 
@@ -127,9 +127,12 @@ public class DocumentController {
     public ResponseEntity<byte[]> download(@RequestParam("source") String source,
                                            @RequestParam(value = "version", required = false) Integer version) {
         UserPrincipal user = DepartmentScope.requireCurrentUser();
-        String visibility = requireDocumentVisibility(source);
-        requireCanRead(user, visibility);
         int target = version == null ? documentManageService.currentVersion(source) : version;
+        String visibility = version == null ? requireDocumentVisibility(source)
+                : requireVersionVisibility(source, target);
+        String status = version == null ? documentManageService.currentStatus(source)
+                : documentManageService.getVersionStatus(source, target);
+        requireCanRead(user, visibility, status, version != null);
         DocumentBlobService.Blob blob = documentBlobService.find(source, target);
         if (blob == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "该版本没有原始文件（可能是历史上传，未保存原件）");
@@ -146,14 +149,27 @@ public class DocumentController {
     public Map<String, Object> preview(@RequestParam("source") String source,
                                        @RequestParam(value = "version", required = false) Integer version) {
         UserPrincipal user = DepartmentScope.requireCurrentUser();
-        requireCanRead(user, requireDocumentVisibility(source));
+        String visibility = version == null ? requireDocumentVisibility(source)
+                : requireVersionVisibility(source, version);
+        String status = version == null ? documentManageService.currentStatus(source)
+                : documentManageService.getVersionStatus(source, version);
+        requireCanRead(user, visibility, status, version != null);
         return Map.of("source", source, "version", version == null ? "current" : version,
                 "text", documentManageService.previewText(source, version));
     }
 
-    /** 读权限：管理员或文档 all / 本人部门可见；部门管理员也能读本部门。 */
-    private void requireCanRead(UserPrincipal user, String visibility) {
-        if (user.isAdmin() || Visibility.ALL.equals(visibility)
+    /** 读权限：普通用户只能读已发布当前版，管理角色可读本部门历史版本。 */
+    private void requireCanRead(UserPrincipal user, String visibility, String status, boolean history) {
+        if (user.isAdmin()) {
+            return;
+        }
+        if (history) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只有管理员能查看历史版本");
+        }
+        if (!"approved".equals(status)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "文档当前不可见");
+        }
+        if (Visibility.ALL.equals(visibility)
                 || (user.department() != null && user.department().equals(visibility))) {
             return;
         }
@@ -170,6 +186,25 @@ public class DocumentController {
         String visibility = documentManageService.getVisibility(source);
         if (visibility == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "文档不存在");
+        }
+        return visibility;
+    }
+
+    private String requireCandidateVisibility(String source) {
+        String visibility = documentManageService.getCandidateVisibility(source);
+        if (visibility == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "待审批文档不存在");
+        }
+        return visibility;
+    }
+
+    private String requireVersionVisibility(String source, int version) {
+        if (version < 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "version 必须大于 0");
+        }
+        String visibility = documentManageService.getVersionVisibility(source, version);
+        if (visibility == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "目标版本不存在");
         }
         return visibility;
     }

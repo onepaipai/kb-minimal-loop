@@ -81,23 +81,49 @@ public class CodeIngestService {
         String fullClassName = packageName.isEmpty()
                 ? primaryType.getNameAsString()
                 : packageName + "." + primaryType.getNameAsString();
+        String fileHash = IngestService.sha256Hex(bytes);
+        String currentVisibility = documentManageService.getVisibility(fileName);
+        String currentStatus = documentManageService.currentStatus(fileName);
+        if (fileHash.equals(documentManageService.findFileHash(fileName))
+                && visibility.equals(currentVisibility) && status.equals(currentStatus)) {
+            return IngestResponse.skipped(fileName, documentManageService.countBySource(fileName),
+                    visibility, status);
+        }
         String batch = UUID.randomUUID().toString();
-        int version = documentManageService.nextVersion(fileName);
-        // 新块先以 pending 入库（问答查不到），发布那一步再一个事务里改成目标状态并 supersede 旧版
-        List<TextSegment> segments = buildSegments(fileName, fullClassName, packageName, source, cu, visibility, batch,
-                "pending", version);
-        if (segments.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件解析后没有可入库的代码块");
-        }
-        Response<List<Embedding>> embeddingsResponse = embeddingModel.embedAll(segments);
-        embeddingStore.addAll(embeddingsResponse.content(), segments);
+        int version = documentManageService.reserveVersion(fileName, batch, fileHash, visibility, status, null);
         try {
-            documentBlobService.save(fileName, version, fileName, "text/plain; charset=UTF-8", bytes);
-        } catch (Exception e) {
-            log.warn("原件保存失败 source={} version={}", fileName, version, e);
+            // 新块先以 pending 入库（问答查不到），发布那一步再改状态并 supersede 旧版。
+            List<TextSegment> segments = buildSegments(fileName, fullClassName, packageName, source, cu, visibility, batch,
+                    "pending", version);
+            if (segments.isEmpty()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件解析后没有可入库的代码块");
+            }
+            for (TextSegment segment : segments) {
+                segment.metadata().put(MetadataKeys.FILE_HASH, fileHash);
+            }
+            Response<List<Embedding>> embeddingsResponse = embeddingModel.embedAll(segments);
+            embeddingStore.addAll(embeddingsResponse.content(), segments);
+            try {
+                documentBlobService.save(fileName, version, fileName, "text/plain; charset=UTF-8", bytes);
+            } catch (Exception e) {
+                log.warn("原件保存失败 source={} version={}", fileName, version, e);
+            }
+            documentManageService.publishVersion(fileName, batch, status);
+            return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility, status);
+        } catch (Exception error) {
+            try {
+                documentManageService.removeByBatch(batch, fileName, version);
+            } catch (Exception cleanupError) {
+                log.error("失败 Java 批次清理失败 source={} batch={}", fileName, batch, cleanupError);
+            }
+            if (error instanceof IOException ioException) {
+                throw ioException;
+            }
+            if (error instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new IOException("Java 文件入库失败", error);
         }
-        documentManageService.publishVersion(fileName, batch, status);
-        return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility, status);
     }
 
     /** 类头块（第 1 行到第一个方法之前）加每个方法一块，块前加定位头。 */

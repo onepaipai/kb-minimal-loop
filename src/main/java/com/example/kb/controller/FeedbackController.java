@@ -1,5 +1,6 @@
 package com.example.kb.controller;
 
+import com.example.kb.common.RequestValidation;
 import com.example.kb.dto.FeedbackRequest;
 import com.example.kb.security.DepartmentScope;
 import com.example.kb.security.UserPrincipal;
@@ -23,6 +24,11 @@ public class FeedbackController {
     /** 提交反馈：helpful 为 true 好评、false 差评；问答原文截断存 500 字。 */
     @PostMapping("/feedback")
     public void submitFeedback(@RequestBody FeedbackRequest request) {
+        if (request == null) {
+            throw new org.springframework.web.server.ResponseStatusException(
+                    org.springframework.http.HttpStatus.BAD_REQUEST, "请求体不能为空");
+        }
+        RequestValidation.validateFeedback(request.getQuestion(), request.getAnswer(), request.getHelpful());
         UserPrincipal user = DepartmentScope.requireCurrentUser();
         feedbackService.submit(user.username(), request.getQuestion(), request.getAnswer(),
                 request.getHelpful() != null && request.getHelpful());

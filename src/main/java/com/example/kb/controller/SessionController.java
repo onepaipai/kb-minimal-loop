@@ -37,13 +37,13 @@ public class SessionController {
     /** 某个会话的消息回放：时间正序，只查自己的；别人的会话查不到（返回空列表）。 */
     @GetMapping("/{sessionId}/messages")
     public List<ChatSessionService.MessageItem> messages(@PathVariable String sessionId) {
-        return chatSessionService.messages(DepartmentScope.requireCurrentUser().username(), sessionId);
+        return chatSessionService.messages(DepartmentScope.requireCurrentUser().username(), requireSessionId(sessionId));
     }
 
     /** 删除会话与它的全部消息。 */
     @DeleteMapping("/{sessionId}")
     public java.util.Map<String, Object> delete(@PathVariable String sessionId) {
-        boolean deleted = chatSessionService.delete(DepartmentScope.requireCurrentUser().username(), sessionId);
+        boolean deleted = chatSessionService.delete(DepartmentScope.requireCurrentUser().username(), requireSessionId(sessionId));
         return java.util.Map.of("deleted", deleted);
     }
 
@@ -64,6 +64,13 @@ public class SessionController {
         return Map.of("requested", ids.size(), "deleted", deleted, "failed", failed);
     }
 
+    private String requireSessionId(String sessionId) {
+        if (sessionId == null || sessionId.isBlank() || sessionId.length() > 100) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "sessionId 长度必须为 1-100 字符");
+        }
+        return sessionId.trim();
+    }
+
     /** 批量入参校验：1-50 个不重复的会话 id。 */
     private List<String> requireIds(SessionBatchDeleteRequest request) {
         if (request == null || request.getIds() == null || request.getIds().isEmpty()) {
@@ -74,6 +81,9 @@ public class SessionController {
                 .map(String::trim)
                 .distinct()
                 .toList();
+        if (ids.stream().anyMatch(id -> id.length() > 100)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "sessionId 最长 100 字符");
+        }
         if (ids.isEmpty() || ids.size() > 50) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "ids 需为 1-50 个有效会话号");
         }

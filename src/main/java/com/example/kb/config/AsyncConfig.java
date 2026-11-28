@@ -35,4 +35,17 @@ public class AsyncConfig {
         executor.initialize();
         return executor;
     }
+
+    /** 混合检索专用有界线程池：慢数据库查询不能无限堆积到 commonPool。 */
+    @Bean("hybridSearchExecutor")
+    public Executor hybridSearchExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(4);
+        executor.setMaxPoolSize(8);
+        executor.setQueueCapacity(100);
+        executor.setThreadNamePrefix("hybrid-search-");
+        executor.setDaemon(true);
+        executor.initialize();
+        return executor;
+    }
 }

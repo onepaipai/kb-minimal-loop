@@ -54,7 +54,7 @@ public class DocumentBatchController {
         }
         List<String> sources = requireSources(request.getSources());
         for (String source : sources) {
-            DepartmentScope.requireCanApprove(user, requireDocumentVisibility(source));
+            DepartmentScope.requireCanApprove(user, requireCandidateVisibility(source));
         }
         return documentBatchService.review(sources, request.getStatus(), request.getReason(), user);
     }
@@ -69,7 +69,7 @@ public class DocumentBatchController {
         String visibility = Visibility.normalize(request.getVisibility());
         List<String> sources = requireSources(request.getSources());
         for (String source : sources) {
-            DepartmentScope.requireCanApprove(user, requireDocumentVisibility(source));
+            DepartmentScope.requireCanApprove(user, requireCandidateVisibility(source));
         }
         return documentBatchService.updateVisibility(sources, visibility, user);
     }
@@ -84,6 +84,9 @@ public class DocumentBatchController {
                 .map(String::trim)
                 .distinct()
                 .toList();
+        if (sources.stream().anyMatch(source -> source.length() > 300)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件名最长 300 字");
+        }
         if (sources.isEmpty() || sources.size() > 50) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "sources 需为 1-50 个有效文件名");
         }
@@ -94,6 +97,14 @@ public class DocumentBatchController {
         String visibility = documentManageService.getVisibility(source);
         if (visibility == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "文档不存在");
+        }
+        return visibility;
+    }
+
+    private String requireCandidateVisibility(String source) {
+        String visibility = documentManageService.getCandidateVisibility(source);
+        if (visibility == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "待审批文档不存在");
         }
         return visibility;
     }

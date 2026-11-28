@@ -52,11 +52,10 @@ public class RefreshTokenService {
         if (rawToken == null || rawToken.isBlank()) {
             return Optional.empty();
         }
-        Optional<RefreshTokenStore.RefreshTokenRow> row = store.find(hash(rawToken));
-        if (row.isEmpty() || row.get().revoked() || !row.get().expiresAt().isAfter(clock.instant())) {
+        Optional<RefreshTokenStore.RefreshTokenRow> row = store.consume(hash(rawToken), clock.instant());
+        if (row.isEmpty()) {
             return Optional.empty();
         }
-        store.revoke(hash(rawToken));
         return Optional.of(new RefreshResult(row.get().username(), issue(row.get().username())));
     }
 

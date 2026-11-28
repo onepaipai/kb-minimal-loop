@@ -35,6 +35,17 @@ public class JdbcRefreshTokenStore implements RefreshTokenStore {
     }
 
     @Override
+    public Optional<RefreshTokenRow> consume(String tokenHash, Instant now) {
+        List<RefreshTokenRow> rows = jdbcTemplate.query(
+                "UPDATE refresh_token SET revoked = TRUE WHERE token_hash = ? AND revoked = FALSE "
+                        + "AND expires_at > ? RETURNING token_hash, username, expires_at, revoked",
+                (rs, i) -> new RefreshTokenRow(rs.getString("token_hash"), rs.getString("username"),
+                        rs.getTimestamp("expires_at").toInstant(), rs.getBoolean("revoked")),
+                tokenHash, Timestamp.from(now));
+        return rows.stream().findFirst();
+    }
+
+    @Override
     public void revoke(String tokenHash) {
         jdbcTemplate.update("UPDATE refresh_token SET revoked = TRUE WHERE token_hash = ?", tokenHash);
     }

@@ -10,11 +10,22 @@ import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
+/**
+ * 文档版本的关系查询与状态变更。chunk_embedding.metadata 只作为检索兼容投影，
+ * 当前版本、候选版本和批次生命周期统一由 document/document_version 维护。
+ */
+@Component
 final class DocumentVersionQueryHelper {
 
     private static final String TABLE = "chunk_embedding";
+    private static final String ACTIVE_STATE = "CURRENT";
+    private static final String PENDING_STATE = "PENDING";
+    private static final String PROCESSING_STATE = "PROCESSING";
+    private static final String SUPERSEDED_STATE = "SUPERSEDED";
 
     private final JdbcTemplate jdbcTemplate;
     private final EmbeddingStore<TextSegment> embeddingStore;
@@ -32,150 +43,202 @@ final class DocumentVersionQueryHelper {
         return department == null ? new Object[]{Visibility.ALL} : new Object[]{Visibility.ALL, department};
     }
 
-    /** 某篇文档的可见性（审批与删除的权限判断用）；不存在返回 null。 */
+    /** 当前已发布版本的可见性；没有已发布版本时回退到处理中的候选版本。 */
     String getVisibility(String source) {
-        List<String> values = jdbcTemplate.query(
-                "SELECT metadata->>'visibility' FROM " + TABLE + " WHERE metadata->>'source' = ? LIMIT 1",
-                (rs, rowNum) -> rs.getString(1), source);
-        if (values.isEmpty()) {
-            return null;
+        VersionRow row = findCurrentVersion(source);
+        if (row == null) {
+            row = findCandidateVersion(source);
         }
-        return values.get(0);
+        return row == null ? null : row.visibility();
     }
 
-    /** 某篇文档当前版的审批状态（回滚后同步条目行状态用）；不存在返回 null，块没存状态按 approved 算。 */
+    /** 待审批候选版本的可见性，审批接口必须使用它而不是已发布版本。 */
+    String getCandidateVisibility(String source) {
+        VersionRow candidate = findCandidateVersion(source);
+        return candidate == null ? getVisibility(source) : candidate.visibility();
+    }
+
+    String getVersionVisibility(String source, int version) {
+        VersionRow row = findVersion(source, version);
+        return row == null ? null : row.visibility();
+    }
+
+    String getVersionStatus(String source, int version) {
+        VersionRow row = findVersion(source, version);
+        return row == null ? null : row.status();
+    }
+
+    /** 当前已发布版本的状态；没有当前版时返回候选版状态。 */
     String currentStatus(String source) {
-        int version = currentVersion(source);
-        if (version == 0) {
-            return null;
+        VersionRow row = findCurrentVersion(source);
+        if (row == null) {
+            row = findCandidateVersion(source);
         }
-        List<String> statuses = jdbcTemplate.query(
-                "SELECT metadata->>'status' FROM " + TABLE + " WHERE metadata->>'source' = ? "
-                        + "AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ? LIMIT 1",
-                (rs, rowNum) -> rs.getString(1), source, version);
-        if (statuses.isEmpty() || statuses.get(0) == null) {
-            return "approved";
+        if (row != null) {
+            return row.status();
         }
-        return statuses.get(0);
+        return legacyCurrentStatus(source);
     }
 
-    /** 某篇文档当前版本的文件哈希（去重用）：只看未被 superseded 的现行版，没有块或老块没存哈希时返回 null。 */
+    /** 当前已发布版本的文件哈希；处理中的版本不能让重试请求误判为成功去重。 */
     String findFileHash(String source) {
-        List<String> values = jdbcTemplate.query(
-                "SELECT metadata->>'file_hash' FROM " + TABLE + " WHERE metadata->>'source' = ? "
-                        + "AND COALESCE(metadata->>'status','approved') <> 'superseded' LIMIT 1",
-                (rs, rowNum) -> rs.getString(1), source);
-        return values.isEmpty() ? null : values.get(0);
+        VersionRow row = findCurrentVersion(source);
+        if (row != null) {
+            return row.fileHash();
+        }
+        return null;
     }
 
-    /** 同名替换的下一个版本号：已有最大版本 +1，首版为 1。 */
+    /** 预留一个唯一版本号并登记处理批次，数据库行更新保证并发 source 不会拿到相同版本。 */
+    int reserveVersion(String source, String batch, String fileHash, String visibility,
+                       String status, String username) {
+        ensureDocument(source);
+        Integer version = jdbcTemplate.queryForObject(
+                "UPDATE document SET next_version = next_version + 1, updated_at = now() "
+                        + "WHERE source = ? RETURNING next_version - 1", Integer.class, source);
+        if (version == null || version < 1) {
+            throw new IllegalStateException("无法预留文档版本");
+        }
+        jdbcTemplate.update("INSERT INTO document_version(source, version, batch, file_hash, visibility, status, "
+                        + "lifecycle_state, username) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                source, version, batch, fileHash, visibility, status, PROCESSING_STATE, username);
+        return version;
+    }
+
+    /** 兼容旧调用方：返回下一版本，但新入库应使用 reserveVersion。 */
     int nextVersion(String source) {
-        return currentVersion(source) + 1;
-    }
-
-    /** 某篇文档的当前版本号（最大版，含已 superseded 的旧版）；不存在返回 0。 */
-    int currentVersion(String source) {
-        Integer max = jdbcTemplate.queryForObject(
-                "SELECT COALESCE(max(CAST(NULLIF(metadata->>'version','') AS INTEGER)), 0) FROM " + TABLE
-                        + " WHERE metadata->>'source' = ?",
+        ensureDocument(source);
+        Integer next = jdbcTemplate.queryForObject("SELECT next_version FROM document WHERE source = ?",
                 Integer.class, source);
-        return max == null ? 0 : max;
+        return next == null ? 1 : next;
     }
 
-    /** 某篇文档的全部版本号（从小到大，含已 superseded 的旧版），回滚下拉框用；不存在返回空列表。 */
+    /** 当前已发布版本；没有时返回 0。 */
+    int currentVersion(String source) {
+        VersionRow row = findCurrentVersion(source);
+        if (row != null) {
+            return row.version();
+        }
+        row = findCandidateVersion(source);
+        if (row != null) {
+            return row.version();
+        }
+        return 0;
+    }
+
+    /** 当前已发布版本号，没有当前版时返回候选版本号。 */
+    private int publishedVersion(String source) {
+        VersionRow row = findCurrentVersion(source);
+        return row == null ? 0 : row.version();
+    }
+
     List<Integer> listVersions(String source) {
+        List<Integer> versions = jdbcTemplate.query(
+                "SELECT version FROM document_version WHERE source = ? AND lifecycle_state <> 'FAILED' "
+                        + "ORDER BY version", (rs, rowNum) -> rs.getInt(1), source);
+        if (!versions.isEmpty()) {
+            return versions;
+        }
         return jdbcTemplate.query(
-                "SELECT DISTINCT CAST(NULLIF(metadata->>'version','') AS INTEGER) AS version FROM " + TABLE
-                        + " WHERE metadata->>'source' = ? ORDER BY version",
-                (rs, rowNum) -> rs.getInt("version"), source);
+                "SELECT DISTINCT COALESCE(CAST(NULLIF(metadata->>'version','') AS INTEGER), 1) "
+                        + "FROM " + TABLE + " WHERE metadata->>'source' = ? ORDER BY 1",
+                (rs, rowNum) -> rs.getInt(1), source);
     }
 
-    /** 审批：当前版本的块统一改状态，返回改动的块数（0 表示文档不存在）；已 superseded 的旧版不动。 */
+    /** 将目标候选版批准/驳回；没有候选版时才操作当前版。 */
     int setStatus(String source, String status) {
-        int version = currentVersion(source);
-        if (version == 0) {
+        VersionRow target = findCandidateVersion(source);
+        if (target == null) {
+            target = findCurrentVersion(source);
+        }
+        if (target == null) {
             return 0;
         }
-        return jdbcTemplate.update("UPDATE " + TABLE
-                + " SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{status}', to_jsonb(?::text)) "
-                + "WHERE metadata->>'source' = ? AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?",
-                status, source, version);
+        return reviewVersion(source, target.version(), status);
     }
 
-    /**
-     * 回滚到指定版本：目标版恢复成它被替换之前的状态（prev_status，缺失按 approved 算），当前版改成 superseded。
-     * 目标版不存在或就是当前版时抛错；返回恢复的块数。
-     */
+    /** 回滚到历史版本：状态、current_version 和块元数据在一个事务中变更。 */
+    @Transactional
     int rollback(String source, int version) {
-        int current = currentVersion(source);
-        if (current == 0) {
+        if (version < 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "version 必须大于 0");
+        }
+        ensureDocument(source);
+        Integer current = jdbcTemplate.queryForObject(
+                "SELECT current_version FROM document WHERE source = ? FOR UPDATE", Integer.class, source);
+        if (current == null || current < 1) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "文档不存在");
         }
-        if (version >= current) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "只能回滚到比当前版更早的版本");
+        if (version == current) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "不能回滚到当前版本");
         }
-        Integer targetChunks = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM " + TABLE + " WHERE metadata->>'source' = ? "
-                        + "AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?",
-                Integer.class, source, version);
-        if (targetChunks == null || targetChunks == 0) {
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "目标版本不存在");
+        VersionRow target = findVersion(source, version);
+        if (target == null || SUPERSEDED_STATE.equals(target.lifecycleState())) {
+            if (target == null) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "目标版本不存在");
+            }
+        } else {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "目标版本不是历史版本");
         }
-        markSupersededVersion(source, current);
-        return jdbcTemplate.update("UPDATE " + TABLE
-                + " SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{status}', "
-                + "to_jsonb(COALESCE(metadata->>'prev_status','approved'))) "
-                + "WHERE metadata->>'source' = ? AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?",
-                source, version);
+        VersionRow currentRow = findVersion(source, current);
+        if (currentRow == null) {
+            currentRow = new VersionRow(source, current, null, null, null, "approved", null,
+                    ACTIVE_STATE, 0);
+        }
+        jdbcTemplate.update("UPDATE " + TABLE + " SET metadata = jsonb_set(jsonb_set(COALESCE(metadata, '{}'::jsonb), "
+                        + "'{status}', to_jsonb('superseded'::text)), '{prev_status}', "
+                        + "to_jsonb(COALESCE(metadata->>'status','approved'))) "
+                        + "WHERE metadata->>'source' = ? AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?",
+                source, current);
+        jdbcTemplate.update("UPDATE document_version SET lifecycle_state = ?, status = 'superseded', "
+                        + "superseded_at = now(), updated_at = now() WHERE source = ? AND version = ?",
+                SUPERSEDED_STATE, source, current);
+        String restoredStatus = target.prevStatus() == null ? "approved" : target.prevStatus();
+        jdbcTemplate.update("UPDATE " + TABLE + " SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), "
+                        + "'{status}', to_jsonb(?::text)) WHERE metadata->>'source' = ? "
+                        + "AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?", restoredStatus, source, version);
+        int restored = jdbcTemplate.update("UPDATE document_version SET lifecycle_state = ?, status = ?, "
+                        + "updated_at = now(), published_at = now() WHERE source = ? AND version = ?",
+                ACTIVE_STATE, restoredStatus, source, version);
+        jdbcTemplate.update("UPDATE document SET current_version = ?, updated_at = now() WHERE source = ?",
+                version, source);
+        return restored;
     }
 
-    /** 把指定版本的块改成 superseded，同时把改之前的状态记到 prev_status（回滚时按它恢复）。 */
-    private int markSupersededVersion(String source, int version) {
-        return jdbcTemplate.update("UPDATE " + TABLE
-                + " SET metadata = jsonb_set(jsonb_set(COALESCE(metadata, '{}'::jsonb), '{status}', "
-                + "to_jsonb('superseded'::text)), '{prev_status}', "
-                + "to_jsonb(COALESCE(metadata->>'status','approved'))) "
-                + "WHERE metadata->>'source' = ? AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?",
-                source, version);
-    }
-
-    /** 待审批的文档数（总览仪表盘用）：department 为 null 只算全员可见的。 */
     int countPending(String department) {
-        String where = "COALESCE(metadata->>'status','approved') = 'pending' AND " + buildVisibilityCondition(department);
-        Integer count = jdbcTemplate.queryForObject(
-                "SELECT count(DISTINCT metadata->>'source') FROM " + TABLE + " WHERE " + where,
-                Integer.class, buildVisibilityParams(department));
+        StringBuilder sql = new StringBuilder("SELECT count(*) FROM document_version WHERE status = 'pending' "
+                + "AND lifecycle_state IN ('PENDING','PROCESSING')");
+        List<Object> params = new ArrayList<>();
+        appendVersionVisibility(sql, params, department);
+        Integer count = jdbcTemplate.queryForObject(sql.toString(), Integer.class, params.toArray());
         return count == null ? 0 : count;
     }
 
-    /**
-     * 统计指定 source 的当前版块数（已 superseded 的旧版不算）。Postgres 的 count(*) 返回 bigint，用 Long 接收避免类型窄化问题。
-     */
     int countBySource(String source) {
-        Long count = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM " + TABLE + " WHERE metadata->>'source' = ? "
-                        + "AND COALESCE(metadata->>'status','approved') <> 'superseded'",
-                Long.class, source);
-        if (count == null) {
-            return 0;
+        VersionRow row = findCurrentVersion(source);
+        if (row == null) {
+            row = findCandidateVersion(source);
         }
-        return count.intValue();
+        if (row != null) {
+            Integer count = jdbcTemplate.queryForObject("SELECT count(*) FROM " + TABLE
+                            + " WHERE metadata->>'source' = ? AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?",
+                    Integer.class, source, row.version());
+            return count == null ? 0 : count;
+        }
+        return 0;
     }
 
-    /** 统计指定 source 的全部块数（含已 superseded 的旧版），删除接口的删除量用。 */
-    private int countAllBySource(String source) {
+    int countAllBySource(String source) {
         Long count = jdbcTemplate.queryForObject(
-                "SELECT count(*) FROM " + TABLE + " WHERE metadata->>'source' = ?",
-                Long.class, source);
+                "SELECT count(*) FROM " + TABLE + " WHERE metadata->>'source' = ?", Long.class, source);
         return count == null ? 0 : count.intValue();
     }
 
-    /**
-     * 删除指定文档的全部块（含已 superseded 的旧版），deletedChunks 为删除前后统计差值（实际删除量）。
-     */
     DeleteDocumentResponse deleteDocument(String source) {
         int before = countAllBySource(source);
         removeBySource(source);
+        jdbcTemplate.update("DELETE FROM document_version WHERE source = ?", source);
+        jdbcTemplate.update("DELETE FROM document WHERE source = ?", source);
         int deletedChunks = before - countAllBySource(source);
         DeleteDocumentResponse response = new DeleteDocumentResponse();
         response.setSource(source);
@@ -184,41 +247,95 @@ final class DocumentVersionQueryHelper {
         return response;
     }
 
-    /** 删指定 source 的全部块，供删除接口复用。 */
+    String previewText(String source, Integer version) {
+        int targetVersion = version == null ? publishedVersion(source) : version;
+        StringBuilder sql = new StringBuilder("SELECT COALESCE(text, '') FROM " + TABLE
+                + " WHERE metadata->>'source' = ? AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?");
+        List<Object> params = new ArrayList<>();
+        params.add(source);
+        params.add(targetVersion);
+        sql.append(" ORDER BY CAST(NULLIF(metadata->>'chunk_index','') AS INTEGER)");
+        List<String> parts = jdbcTemplate.queryForList(sql.toString(), String.class, params.toArray());
+        return String.join("\n\n", parts);
+    }
+
     void removeBySource(String source) {
         embeddingStore.removeAll(MetadataFilterBuilder.metadataKey(MetadataKeys.SOURCE).isEqualTo(source));
     }
 
-    /**
-     * 同名替换的第二步：旧版块不删，改成 superseded（问答与清单自动排除），同时把改之前的状态记到 prev_status，
-     * 回滚时按它恢复（没批过的旧版回滚后还是待审批，不会悄悄发布）。
-     * 用 SQL 而不用 Filter：旧块可能没有 batch 字段，Filter 的不等于匹配不到 NULL，COALESCE 才能兜住。
-     */
+    /** 按批次精确清理失败入库，不能误删同名文档其它版本。 */
+    void removeByBatch(String batch) {
+        if (batch == null || batch.isBlank()) {
+            return;
+        }
+        embeddingStore.removeAll(MetadataFilterBuilder.metadataKey(MetadataKeys.BATCH).isEqualTo(batch));
+        jdbcTemplate.update("UPDATE document_version SET lifecycle_state = 'FAILED', updated_at = now() "
+                        + "WHERE batch = ? AND lifecycle_state IN ('PROCESSING','PENDING')", batch);
+    }
+
+    /** 兼容旧的批次发布调用；新版本同时更新关系表。 */
+    @Transactional
+    void publishVersion(String source, String batch, String status) {
+        VersionRow target = findVersionByBatch(source, batch);
+        if (target == null && !relationRowsExist(source)) {
+            int updated = jdbcTemplate.update("UPDATE " + TABLE
+                    + " SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{status}', to_jsonb(?::text)) "
+                    + "WHERE metadata->>'source' = ? AND COALESCE(metadata->>'batch', '') = ?",
+                    status, source, batch);
+            jdbcTemplate.update("UPDATE " + TABLE + " SET metadata = jsonb_set(jsonb_set(COALESCE(metadata, '{}'::jsonb), "
+                    + "'{status}', to_jsonb('superseded'::text)), '{prev_status}', "
+                    + "to_jsonb(COALESCE(metadata->>'status','approved'))) WHERE metadata->>'source' = ? "
+                    + "AND COALESCE(metadata->>'batch','') <> ?", source, batch);
+            return;
+        }
+        if (target == null) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "入库批次不存在");
+        }
+        int updated = jdbcTemplate.update("UPDATE " + TABLE
+                + " SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{status}', to_jsonb(?::text)) "
+                + "WHERE metadata->>'source' = ? AND COALESCE(metadata->>'batch', '') = ?",
+                status, source, batch);
+        if (updated == 0) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "入库批次没有可发布的块");
+        }
+        ensureDocument(source);
+        jdbcTemplate.queryForObject("SELECT current_version FROM document WHERE source = ? FOR UPDATE",
+                Integer.class, source);
+        Long chunkCount = jdbcTemplate.queryForObject("SELECT count(*) FROM " + TABLE
+                        + " WHERE metadata->>'source' = ? AND COALESCE(metadata->>'batch','') = ?",
+                Long.class, source, batch);
+        if (chunkCount == null || chunkCount < 1) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "入库批次块数无效");
+        }
+        jdbcTemplate.update("UPDATE document_version SET chunk_count = ?, updated_at = now() "
+                        + "WHERE source = ? AND version = ?", chunkCount.intValue(), source, target.version());
+        if ("pending".equals(status)) {
+            jdbcTemplate.update("UPDATE document_version SET status = ?, lifecycle_state = ?, updated_at = now() "
+                            + "WHERE source = ? AND version = ?", status, PENDING_STATE, source, target.version());
+        } else {
+            jdbcTemplate.update("UPDATE document_version SET status = ?, lifecycle_state = ?, published_at = now(), "
+                            + "updated_at = now() WHERE source = ? AND version = ?",
+                    status, ACTIVE_STATE, source, target.version());
+            markOtherVersionsSuperseded(source, target.version());
+            jdbcTemplate.update("UPDATE document SET current_version = ?, updated_at = now() WHERE source = ?",
+                    target.version(), source);
+        }
+    }
+
     int markSuperseded(String source, String keepBatch) {
-        return jdbcTemplate.update("UPDATE " + TABLE
+        int updated = jdbcTemplate.update("UPDATE " + TABLE
                 + " SET metadata = jsonb_set(jsonb_set(COALESCE(metadata, '{}'::jsonb), '{status}', "
                 + "to_jsonb('superseded'::text)), '{prev_status}', "
                 + "to_jsonb(COALESCE(metadata->>'status','approved'))) "
                 + "WHERE metadata->>'source' = ? AND COALESCE(metadata->>'batch', '') <> ?", source, keepBatch);
+        if (relationRowsExist(source)) {
+            jdbcTemplate.update("UPDATE document_version SET lifecycle_state = 'SUPERSEDED', status = 'superseded', "
+                            + "updated_at = now() WHERE source = ? AND batch <> ? AND lifecycle_state <> 'FAILED'",
+                    source, keepBatch);
+        }
+        return updated;
     }
 
-    /**
-     * 同名替换的发布一步：新版块先以 pending 入库（问答查不到），这里一个事务里把它改成目标状态，
-     * 同时把其余旧版标成 superseded。入库中途断了（向量接口报错、断库）发布没跑，旧版还活着、新版不可见，
-     * 问答不会同时看到新旧两版；发布本身是原子的，断在中间会整体回滚。
-     */
-    void publishVersion(String source, String batch, String status) {
-        jdbcTemplate.update("UPDATE " + TABLE
-                + " SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), '{status}', to_jsonb(?::text)) "
-                + "WHERE metadata->>'source' = ? AND COALESCE(metadata->>'batch', '') = ?",
-                status, source, batch);
-        markSuperseded(source, batch);
-    }
-
-    /**
-     * 条目分类与标签回填：写到指定版块的元数据上（其余版本不带），文档清单按它们展示与筛。
-     * category 与 tags 都为空时不做任何更新。
-     */
     void attachTagsAndCategory(String source, int version, String category, String tags) {
         String effectiveCategory = DocumentManageService.blankToNull(category);
         String effectiveTags = DocumentManageService.blankToNull(tags);
@@ -242,19 +359,211 @@ final class DocumentVersionQueryHelper {
                 params.toArray());
     }
 
-    /** 改当前版可见性：只动未被 superseded 的现行块，旧版不动（回滚后仍是原来的可见性）。 */
     int updateVisibility(String source, String visibility) {
+        VersionRow target = findCandidateVersion(source);
+        if (target == null) {
+            target = findCurrentVersion(source);
+        }
+        if (target == null) {
+            return 0;
+        }
+        jdbcTemplate.update("UPDATE document_version SET visibility = ?, updated_at = now() "
+                        + "WHERE source = ? AND version = ?", visibility, source, target.version());
         return jdbcTemplate.update("UPDATE " + TABLE + " SET metadata = "
-                + "jsonb_set(metadata, '{visibility}', to_jsonb(?::text)) "
-                + "WHERE metadata->>'source' = ? AND COALESCE(metadata->>'status','approved') <> 'superseded'",
-                visibility, source);
+                + "jsonb_set(COALESCE(metadata, '{}'::jsonb), '{visibility}', to_jsonb(?::text)) "
+                + "WHERE metadata->>'source' = ? AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?",
+                visibility, source, target.version());
     }
 
     int purgeOldSuperseded(int keep) {
-        return jdbcTemplate.update("DELETE FROM " + TABLE + " c "
-                + "WHERE COALESCE(c.metadata->>'status', 'approved') = 'superseded' "
-                + "AND CAST(NULLIF(c.metadata->>'version', '') AS INTEGER) <= "
-                + "(SELECT COALESCE(max(CAST(NULLIF(metadata->>'version', '') AS INTEGER)), 0) - ? "
-                + "FROM " + TABLE + " WHERE metadata->>'source' = c.metadata->>'source')", keep);
+        List<VersionRef> targets = jdbcTemplate.query(
+                "SELECT source, version FROM (SELECT source, version, row_number() OVER "
+                        + "(PARTITION BY source ORDER BY version DESC) AS rn FROM document_version "
+                        + "WHERE lifecycle_state = 'SUPERSEDED') ranked WHERE rn > ?",
+                (rs, rowNum) -> new VersionRef(rs.getString("source"), rs.getInt("version")), keep);
+        if (targets.isEmpty() && !relationRowsExist("")) {
+            return jdbcTemplate.update("DELETE FROM " + TABLE + " c WHERE COALESCE(c.metadata->>'status','approved') = 'superseded' "
+                    + "AND CAST(NULLIF(c.metadata->>'version','') AS INTEGER) <= "
+                    + "(SELECT COALESCE(max(CAST(NULLIF(metadata->>'version','') AS INTEGER)), 0) - ? "
+                    + "FROM " + TABLE + " WHERE metadata->>'source' = c.metadata->>'source')", keep);
+        }
+        int deleted = 0;
+        for (VersionRef target : targets) {
+            deleted += jdbcTemplate.update("DELETE FROM " + TABLE + " WHERE metadata->>'source' = ? "
+                    + "AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?", target.source(), target.version());
+            jdbcTemplate.update("DELETE FROM document_version WHERE source = ? AND version = ?",
+                    target.source(), target.version());
+        }
+        return deleted;
+    }
+
+    private int reviewVersion(String source, int version, String status) {
+        int chunks = jdbcTemplate.update("UPDATE " + TABLE + " SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), "
+                + "'{status}', to_jsonb(?::text)) WHERE metadata->>'source' = ? "
+                + "AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?", status, source, version);
+        if (chunks == 0) {
+            return 0;
+        }
+        ensureDocument(source);
+        jdbcTemplate.queryForObject("SELECT current_version FROM document WHERE source = ? FOR UPDATE",
+                Integer.class, source);
+        if ("approved".equals(status) || "rejected".equals(status)) {
+            jdbcTemplate.update("UPDATE document_version SET status = ?, lifecycle_state = 'CURRENT', "
+                            + "published_at = now(), updated_at = now() WHERE source = ? AND version = ?",
+                    status, source, version);
+            markOtherVersionsSuperseded(source, version);
+            ensureDocument(source);
+            jdbcTemplate.update("UPDATE document SET current_version = ?, updated_at = now() WHERE source = ?",
+                    version, source);
+        } else {
+            jdbcTemplate.update("UPDATE document_version SET status = ?, lifecycle_state = 'PENDING', updated_at = now() "
+                            + "WHERE source = ? AND version = ?", status, source, version);
+        }
+        return chunks;
+    }
+
+    private void markOtherVersionsSuperseded(String source, int keepVersion) {
+        jdbcTemplate.update("UPDATE " + TABLE + " SET metadata = jsonb_set(jsonb_set(COALESCE(metadata, '{}'::jsonb), "
+                + "'{status}', to_jsonb('superseded'::text)), '{prev_status}', "
+                + "to_jsonb(COALESCE(metadata->>'status','approved'))) WHERE metadata->>'source' = ? "
+                + "AND CAST(NULLIF(metadata->>'version','') AS INTEGER) <> ? "
+                + "AND COALESCE(metadata->>'status','approved') <> 'superseded'", source, keepVersion);
+        jdbcTemplate.update("UPDATE document_version SET lifecycle_state = 'SUPERSEDED', status = 'superseded', "
+                        + "updated_at = now() WHERE source = ? AND version <> ? AND lifecycle_state <> 'FAILED'",
+                source, keepVersion);
+    }
+
+    private void appendVersionVisibility(StringBuilder sql, List<Object> params, String department) {
+        if (department == null) {
+            sql.append(" AND visibility = ?");
+            params.add(Visibility.ALL);
+        } else {
+            sql.append(" AND visibility IN (?, ?)");
+            params.add(Visibility.ALL);
+            params.add(department);
+        }
+    }
+
+    private void ensureDocument(String source) {
+        jdbcTemplate.update("INSERT INTO document(source, next_version) VALUES (?, 1) ON CONFLICT (source) DO NOTHING",
+                source);
+    }
+
+    private VersionRow findCurrentVersion(String source) {
+        List<VersionRow> rows = queryVersions("SELECT source, version, batch, file_hash, visibility, status, "
+                + "prev_status, lifecycle_state, chunk_count FROM document_version "
+                + "WHERE source = ? AND lifecycle_state = 'CURRENT' ORDER BY version DESC LIMIT 1", source);
+        if (!rows.isEmpty()) {
+            return rows.get(0);
+        }
+        VersionRow legacy = findLegacyVersion(source, false);
+        if (legacy != null) {
+            return legacy;
+        }
+        Integer version = legacyVersionNumber(source, false);
+        return version == null || version < 1
+                ? null
+                : new VersionRow(source, version, null, null, null, "approved", null, ACTIVE_STATE, 0);
+    }
+
+    private VersionRow findCandidateVersion(String source) {
+        List<VersionRow> rows = queryVersions("SELECT source, version, batch, file_hash, visibility, status, "
+                + "prev_status, lifecycle_state, chunk_count FROM document_version "
+                + "WHERE source = ? AND lifecycle_state IN ('PROCESSING','PENDING') ORDER BY version DESC LIMIT 1", source);
+        if (!rows.isEmpty()) {
+            return rows.get(0);
+        }
+        return findLegacyVersion(source, true);
+    }
+
+    private VersionRow findLegacyVersion(String source, boolean candidate) {
+        String state = candidate ? "pending" : "approved";
+        List<VersionRow> rows = jdbcTemplate.query("SELECT metadata->>'source' AS source, "
+                        + "COALESCE(CAST(NULLIF(metadata->>'version','') AS INTEGER), 1) AS version, "
+                        + "metadata->>'batch' AS batch, metadata->>'file_hash' AS file_hash, "
+                        + "metadata->>'visibility' AS visibility, COALESCE(metadata->>'status','approved') AS status, "
+                        + "metadata->>'prev_status' AS prev_status, metadata->>'chunk_index' AS chunk_count "
+                        + "FROM " + TABLE + " WHERE metadata->>'source' = ? "
+                        + "AND COALESCE(metadata->>'status','approved') = ? "
+                        + "ORDER BY CAST(NULLIF(metadata->>'version','') AS INTEGER) DESC LIMIT 1",
+                (rs, rowNum) -> new VersionRow(rs.getString("source"), rs.getInt("version"),
+                        rs.getString("batch"), rs.getString("file_hash"), rs.getString("visibility"),
+                        rs.getString("status"), rs.getString("prev_status"),
+                        candidate ? PENDING_STATE : ACTIVE_STATE, 0), source, state);
+        if (!rows.isEmpty()) {
+            return rows.get(0);
+        }
+        return null;
+    }
+
+    private Integer legacyVersionNumber(String source, boolean pending) {
+        String status = pending ? "pending" : "approved";
+        return jdbcTemplate.queryForObject("SELECT max(CAST(NULLIF(metadata->>'version','') AS INTEGER)) FROM "
+                        + TABLE + " WHERE metadata->>'source' = ? AND COALESCE(metadata->>'status','approved') = ?",
+                Integer.class, source, status);
+    }
+
+    private VersionRow findVersion(String source, int version) {
+        List<VersionRow> rows = queryVersions("SELECT source, version, batch, file_hash, visibility, status, "
+                + "prev_status, lifecycle_state, chunk_count FROM document_version WHERE source = ? AND version = ?",
+                source, version);
+        if (!rows.isEmpty()) {
+            return rows.get(0);
+        }
+        List<VersionRow> legacy = jdbcTemplate.query("SELECT metadata->>'source' AS source, "
+                        + "COALESCE(CAST(NULLIF(metadata->>'version','') AS INTEGER), 1) AS version, "
+                        + "metadata->>'batch' AS batch, metadata->>'file_hash' AS file_hash, "
+                        + "metadata->>'visibility' AS visibility, COALESCE(metadata->>'status','approved') AS status, "
+                        + "metadata->>'prev_status' AS prev_status, 0 AS chunk_count FROM " + TABLE
+                        + " WHERE metadata->>'source' = ? AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ? LIMIT 1",
+                (rs, rowNum) -> new VersionRow(rs.getString("source"), rs.getInt("version"),
+                        rs.getString("batch"), rs.getString("file_hash"), rs.getString("visibility"),
+                        rs.getString("status"), rs.getString("prev_status"),
+                        "superseded".equals(rs.getString("status")) ? SUPERSEDED_STATE : ACTIVE_STATE, 0),
+                source, version);
+        if (!legacy.isEmpty()) {
+            return legacy.get(0);
+        }
+        Integer count = jdbcTemplate.queryForObject("SELECT count(*) FROM " + TABLE
+                        + " WHERE metadata->>'source' = ? AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ?",
+                Integer.class, source, version);
+        return count != null && count > 0
+                ? new VersionRow(source, version, null, null, null, "superseded", "approved", SUPERSEDED_STATE, 0)
+                : null;
+    }
+
+    private VersionRow findVersionByBatch(String source, String batch) {
+        List<VersionRow> rows = queryVersions("SELECT source, version, batch, file_hash, visibility, status, "
+                + "prev_status, lifecycle_state, chunk_count FROM document_version WHERE source = ? AND batch = ?",
+                source, batch);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    private boolean relationRowsExist(String source) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM document_version WHERE source = ?", Integer.class, source);
+        return count != null && count > 0;
+    }
+
+    private List<VersionRow> queryVersions(String sql, Object... params) {
+        return jdbcTemplate.query(sql, (rs, rowNum) -> new VersionRow(rs.getString("source"), rs.getInt("version"),
+                rs.getString("batch"), rs.getString("file_hash"), rs.getString("visibility"),
+                rs.getString("status"), rs.getString("prev_status"), rs.getString("lifecycle_state"),
+                rs.getInt("chunk_count")), params);
+    }
+
+    private String legacyCurrentStatus(String source) {
+        List<String> statuses = jdbcTemplate.query("SELECT metadata->>'status' FROM " + TABLE
+                        + " WHERE metadata->>'source' = ? AND COALESCE(metadata->>'status','approved') <> 'superseded' "
+                        + "ORDER BY CAST(NULLIF(metadata->>'version','') AS INTEGER) DESC LIMIT 1",
+                (rs, rowNum) -> rs.getString(1), source);
+        return statuses.isEmpty() || statuses.get(0) == null ? null : statuses.get(0);
+    }
+
+    private record VersionRow(String source, int version, String batch, String fileHash, String visibility,
+                              String status, String prevStatus, String lifecycleState, int chunkCount) {
+    }
+
+    private record VersionRef(String source, int version) {
     }
 }

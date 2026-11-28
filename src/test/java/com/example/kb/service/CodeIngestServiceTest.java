@@ -16,6 +16,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.verify;
@@ -42,7 +43,8 @@ class CodeIngestServiceTest {
         String block = "        System.out.println(\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\");\n".repeat(60);
         String source = "package com.example;\n\npublic class Big {\n    void big() {\n"
                 + block + "\n" + block + "\n" + block + "    }\n}\n";
-        when(documentManageService.nextVersion(anyString())).thenReturn(1);
+        when(documentManageService.reserveVersion(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
+                .thenReturn(1);
         when(documentManageService.countBySource(anyString())).thenReturn(4);
         when(embeddingModel.embedAll(anyList()))
                 .thenReturn(Response.from(List.of(new Embedding(new float[] {0f}))));

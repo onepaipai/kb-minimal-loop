@@ -200,17 +200,16 @@ public class UserService {
         return user.lockedUntil() != null && user.lockedUntil().isAfter(OffsetDateTime.now());
     }
 
-    /** 登录失败记一次；到 5 次锁定 15 分钟并清零计数（锁定期内再错不延长）。 */
+    /** 登录失败用单条条件更新，避免并发错误登录覆盖失败次数。 */
     public void recordFailedLogin(String username) {
-        Integer attempts = jdbcTemplate.queryForObject(
-                "SELECT failed_attempts FROM app_user WHERE username = ?", Integer.class, username);
-        int next = (attempts == null ? 0 : attempts) + 1;
-        if (next >= MAX_FAILED_ATTEMPTS) {
-            jdbcTemplate.update("UPDATE app_user SET failed_attempts = 0, locked_until = now() + (?::text || ' minutes')::interval "
-                    + "WHERE username = ?", LOCK_MINUTES, username);
-        } else {
-            jdbcTemplate.update("UPDATE app_user SET failed_attempts = ? WHERE username = ?", next, username);
-        }
+        jdbcTemplate.update("UPDATE app_user SET failed_attempts = CASE "
+                        + "WHEN locked_until IS NOT NULL AND locked_until <= now() THEN 1 "
+                        + "ELSE failed_attempts + 1 END, locked_until = CASE "
+                        + "WHEN locked_until IS NOT NULL AND locked_until > now() THEN locked_until "
+                        + "WHEN (CASE WHEN locked_until IS NOT NULL AND locked_until <= now() THEN 1 "
+                        + "ELSE failed_attempts + 1 END) >= ? "
+                        + "THEN now() + (?::text || ' minutes')::interval ELSE NULL END WHERE username = ?",
+                MAX_FAILED_ATTEMPTS, LOCK_MINUTES, username);
     }
 
     /** 登录成功清零失败计数与锁定。 */

@@ -2,6 +2,7 @@ package com.example.kb.service;
 
 import com.example.kb.security.UserPrincipal;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -29,6 +30,7 @@ public class DocumentBatchService {
     }
 
     /** 单条审批：改状态、同步条目行、记审计（含驳回理由）、发通知。 */
+    @Transactional
     public Map<String, Object> reviewOne(String source, String status, String reason, UserPrincipal user) {
         int chunks = documentManageService.setStatus(source, status);
         knowledgeEntryService.syncStatusBySource(source, status);
@@ -74,6 +76,7 @@ public class DocumentBatchService {
     }
 
     /** 批量改可见性：只改现行块，返回成功/失败清单（非原子）。 */
+    @Transactional
     public Map<String, Object> updateVisibility(List<String> sources, String visibility, UserPrincipal user) {
         List<String> updated = new ArrayList<>();
         List<String> failed = new ArrayList<>();

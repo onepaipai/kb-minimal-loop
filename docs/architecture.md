@@ -18,6 +18,7 @@
 ```text
 上传文件 → 后缀分流 → 解析成文本 → 切块（800/150，结构感知）→ 向量化（1024 维）
         → 存 pgvector（chunk_embedding，metadata JSONB 带 source/chunk_index/chunk_total/section）
+        → document/document_version 登记批次、当前版本、审批状态与失败生命周期
         → 原始字节另存 document_blob（source + version，供下载原格式；删文档与旧版清理时同步删）
              BLOB_ENABLED 可关闭、BLOB_MAX_SIZE_MB 默认 10MB 限单文件，超限或关闭时跳过；在线知识条目不存原件
 ```
@@ -60,7 +61,7 @@ JavaParser 只找边界，按 `Range` 行号切原文保留注释与格式：一
 | 部署 | 不用 Docker，Windows 可跑；数据库走 Neon 云库直连端点 |
 | 模型 | 聊天与向量分开：DeepSeek 只做聊天（它没有公开 embedding 接口），向量走 DashScope |
 | 密钥 | 12 个敏感值全部走环境变量，不写死、不进 git（见 [部署](deployment.md)） |
-| 表结构 | `schema.sql` 建表（`IF NOT EXISTS`），向量库配置 `createTable=false`、`skipCreateVectorExtension=true`，不重复建表 |
+| 表结构 | `schema.sql` 按依赖顺序建表并回填 `document`/`document_version`；向量库配置 `createTable=false`、`skipCreateVectorExtension=true`，不重复建表 |
 | 元数据 | `COMBINED_JSONB` 模式，对应 `schema.sql` 的 `metadata JSONB` 列；`source` 为文件名，是清单/删除/定向检索的键 |
 | Tika | 只用 `langchain4j-document-parser-apache-tika`（内嵌 Tika 3.2.3），严禁 Tika 4.x——改了 `Parser.parse` 签名，编译能过、运行时 `NoSuchMethodError` |
 

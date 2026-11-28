@@ -7,7 +7,7 @@
 - DeepSeek 平台 API Key、阿里云 DashScope API Key
 - 扫描版 PDF 要 OCR 时才需要：服务器装 Tesseract（Linux：`sudo apt install tesseract-ocr`，中文再加 `tesseract-ocr-chi-sim`；Windows：去 tesseract 官网下安装包，装完把安装目录加进 PATH）。没装也不影响启动，只是扫描版 PDF 上传会报 400；普通 PDF、Word、Excel、PPT 不需要它。
 
-## 环境变量（17 个，模型与数据库的 5 个必填，其余可选）
+## 环境变量（17 个，模型、数据库和 JWT_SECRET 共 6 个必填，其余可选）
 
 | 变量 | 说明 | 示例 |
 | --- | --- | --- |
@@ -16,7 +16,7 @@
 | `DB_URL` | Neon JDBC 直连地址 | `jdbc:postgresql://ep-xxx.ap-southeast-1.aws.neon.tech/neondb?sslmode=require` |
 | `DB_USER` | 数据库用户名 | `neondb_owner` |
 | `DB_PASSWORD` | 数据库密码 | `******` |
-| `JWT_SECRET` | JWT 签名密钥，至少 32 个字符；不配则启动时随机生成（重启后旧 Token 失效） | `换成你自己的长随机串` |
+| `JWT_SECRET` | JWT 签名密钥，至少 32 个字符；未配置时应用拒绝启动 | `换成你自己的长随机串` |
 | `ADMIN_USERNAME` | 初始管理员账号，默认 `admin` | `admin` |
 | `ADMIN_PASSWORD` | 初始管理员密码；不配则随机生成并打在启动日志里，登录后立即修改 | `******` |
 | `OIDC_ENABLED` | 企业登录开关，默认 `false`（不开则 OIDC 不存在，应用不受影响） | `true` |

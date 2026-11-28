@@ -75,18 +75,28 @@ public class KnowledgeEntryService {
         String effectiveVisibility = payloadHelper.prepareVisibility(user, visibility);
         String source = title.trim() + KnowledgeEntryPayloadHelper.SOURCE_SUFFIX;
         payloadHelper.requireSourceFree(source);
+        if (!documentManageService.reserveSource(source)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "已存在同名文档或知识条目，请换个标题");
+        }
         String status = DepartmentScope.initialDocStatus(user, effectiveVisibility);
         UUID id = UUID.randomUUID();
-        jdbcTemplate.update("INSERT INTO knowledge_entry(id, title, source, content, category, tags, "
-                        + "visibility, status, username) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                id, title.trim(), source, content, DocumentManageService.blankToNull(category),
-                normalizeTags(tags), effectiveVisibility, status, user.username());
-        KnowledgeEntrySaved saved = payloadHelper.ingestChunks(id, title.trim(), source, content, effectiveVisibility,
-                status, category, tags);
-        payloadHelper.notifyIfPending(source, status);
-        auditService.record(user.username(), "CREATE_ENTRY", title.trim(),
-                "visibility=" + effectiveVisibility + " status=" + status);
-        return saved;
+        try {
+            jdbcTemplate.update("INSERT INTO knowledge_entry(id, title, source, content, category, tags, "
+                            + "visibility, status, username) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    id, title.trim(), source, content, DocumentManageService.blankToNull(category),
+                    normalizeTags(tags), effectiveVisibility, status, user.username());
+            KnowledgeEntrySaved saved = payloadHelper.ingestChunks(id, title.trim(), source, content,
+                    effectiveVisibility, status, category, tags);
+            payloadHelper.notifyIfPending(source, status);
+            auditService.record(user.username(), "CREATE_ENTRY", title.trim(),
+                    "visibility=" + effectiveVisibility + " status=" + status);
+            return saved;
+        } catch (RuntimeException error) {
+            // 条目主表不能留下没有向量版本的孤儿记录，向量批次由 IngestService 自己补偿清理。
+            jdbcTemplate.update("DELETE FROM knowledge_entry WHERE id = ?", id);
+            documentManageService.releaseSourceIfEmpty(source);
+            throw error;
+        }
     }
 
     /** 更新条目并重新入库：正文/分类/标签/可见性为 null 的沿用原值；标题不可改；重新入库走同名替换。 */
@@ -105,14 +115,22 @@ public class KnowledgeEntryService {
         String effectiveCategory = payloadHelper.firstNonBlank(category, row.category());
         String effectiveTags = payloadHelper.firstNonBlank(tags, row.tags());
         String status = DepartmentScope.initialDocStatus(user, effectiveVisibility);
-        jdbcTemplate.update("UPDATE knowledge_entry SET content = ?, category = ?, tags = ?, visibility = ?, "
-                + "status = ?, updated_at = now() WHERE id = ?", effectiveContent, effectiveCategory, effectiveTags,
-                effectiveVisibility, status, id);
-        KnowledgeEntrySaved saved = payloadHelper.ingestChunks(id, row.title(), row.source(), effectiveContent,
-                effectiveVisibility, status, effectiveCategory, effectiveTags);
-        auditService.record(user.username(), "UPDATE_ENTRY", row.title(),
-                "visibility=" + effectiveVisibility + " status=" + status);
-        return saved;
+        try {
+            jdbcTemplate.update("UPDATE knowledge_entry SET content = ?, category = ?, tags = ?, visibility = ?, "
+                    + "status = ?, updated_at = now() WHERE id = ?", effectiveContent, effectiveCategory, effectiveTags,
+                    effectiveVisibility, status, id);
+            KnowledgeEntrySaved saved = payloadHelper.ingestChunks(id, row.title(), row.source(), effectiveContent,
+                    effectiveVisibility, status, effectiveCategory, effectiveTags);
+            auditService.record(user.username(), "UPDATE_ENTRY", row.title(),
+                    "visibility=" + effectiveVisibility + " status=" + status);
+            return saved;
+        } catch (RuntimeException error) {
+            // 向量入库失败时恢复编辑前的主表快照，避免详情和检索读取不同版本。
+            jdbcTemplate.update("UPDATE knowledge_entry SET content = ?, category = ?, tags = ?, visibility = ?, "
+                            + "status = ?, updated_at = now() WHERE id = ?", row.content(), row.category(), row.tags(),
+                    row.visibility(), row.status(), id);
+            throw error;
+        }
     }
 
     /** 删除条目：块（含旧版）与条目行一起删；权限与文档删除一致。 */

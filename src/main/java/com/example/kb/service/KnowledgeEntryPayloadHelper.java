@@ -76,7 +76,7 @@ final class KnowledgeEntryPayloadHelper {
 
     /** 条目来源不能与现有文档撞名：撞名会让同名替换管线把别人的文档当旧版替换掉。 */
     void requireSourceFree(String source) {
-        if (documentManageService.getVisibility(source) != null) {
+        if (documentManageService.hasDocument(source)) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "已存在同名文档，请换个标题");
         }
     }

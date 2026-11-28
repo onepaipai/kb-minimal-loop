@@ -4,6 +4,9 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.locks.ReentrantLock;
 
 import com.example.kb.common.Visibility;
 import com.example.kb.dto.AskRequest;
@@ -46,6 +49,29 @@ public class RagService {
     public record AskScope(String username, String department) {
     }
 
+    /** SSE 请求的协作式取消状态，贯穿检索、模型回调和落库阶段。 */
+    public static final class StreamCancellation {
+        private final AtomicBoolean cancelled = new AtomicBoolean();
+        private volatile Runnable cancelHook;
+
+        public void cancel() {
+            if (cancelled.compareAndSet(false, true) && cancelHook != null) {
+                cancelHook.run();
+            }
+        }
+
+        public void onCancel(Runnable hook) {
+            cancelHook = hook;
+            if (cancelled.get()) {
+                hook.run();
+            }
+        }
+
+        public boolean isCancelled() {
+            return cancelled.get() || Thread.currentThread().isInterrupted();
+        }
+    }
+
     private final EmbeddingStore<TextSegment> embeddingStore;
     private final ChatModel chatModel;
     private final StreamingChatModel streamingChatModel;
@@ -55,6 +81,7 @@ public class RagService {
     private final QuestionMissService questionMissService;
     private final ChatSessionService chatSessionService;
     private final QueryEmbeddingCache queryEmbeddingCache;
+    private final ConcurrentHashMap<String, ReentrantLock> sessionLocks = new ConcurrentHashMap<>();
 
     public RagService(EmbeddingModel embeddingModel, EmbeddingStore<TextSegment> embeddingStore,
                       ChatModel chatModel, StreamingChatModel streamingChatModel, ChatMemoryStore chatMemoryStore,
@@ -75,6 +102,7 @@ public class RagService {
     public interface StreamListener {
         void onSources(List<ReferenceHit> hits);
         void onToken(String token);
+        void onFinalAnswer(String answer);
         void onComplete();
         void onError(Throwable error);
     }
@@ -93,6 +121,16 @@ public class RagService {
      * 有命中时先删超出引用范围的编号，再校验每个引用有没有文本依据。
      */
     public AskResponse ask(AskRequest request, AskScope scope) {
+        ReentrantLock lock = sessionLock(request, scope);
+        lock.lock();
+        try {
+            return askInternal(request, scope);
+        } finally {
+            releaseSessionLock(request, scope, lock);
+        }
+    }
+
+    private AskResponse askInternal(AskRequest request, AskScope scope) {
         chatSessionService.appendQuestion(scope.username(), request.getSessionId(), scope.department(),
                 request.getQuestion());
         PreparedAsk prepared = prepare(request, scope);
@@ -131,44 +169,86 @@ public class RagService {
      * 超范围的 [n] 发出去之前就删掉，存进记忆与会话历史的是同一份过滤后并校验过的文本。
      */
     public void askStream(AskRequest request, AskScope scope, StreamListener listener) {
+        askStream(request, scope, listener, new StreamCancellation());
+    }
+
+    public void askStream(AskRequest request, AskScope scope, StreamListener listener,
+                          StreamCancellation cancellation) {
+        ReentrantLock lock = sessionLock(request, scope);
+        lock.lock();
+        AtomicBoolean released = new AtomicBoolean();
+        Runnable release = () -> {
+            if (released.compareAndSet(false, true)) {
+                releaseSessionLock(request, scope, lock);
+            }
+        };
+        cancellation.onCancel(release);
         chatSessionService.appendQuestion(scope.username(), request.getSessionId(), scope.department(),
                 request.getQuestion());
+        if (cancellation.isCancelled()) {
+            release.run();
+            return;
+        }
         PreparedAsk prepared = prepare(request, scope);
+        if (cancellation.isCancelled()) {
+            release.run();
+            return;
+        }
         listener.onSources(prepared.hits());
         if (prepared.standardAnswer() != null) {
+            if (cancellation.isCancelled()) {
+                release.run();
+                return;
+            }
             listener.onToken(prepared.standardAnswer());
+            listener.onFinalAnswer(prepared.standardAnswer());
             saveMemory(prepared, request.getQuestion(), prepared.standardAnswer());
             chatSessionService.completeAnswer(scope.username(), request.getSessionId(),
                     prepared.standardAnswer(), prepared.hits());
             listener.onComplete();
+            release.run();
             return;
         }
         if (prepared.hits().isEmpty()) {
+            if (cancellation.isCancelled()) {
+                release.run();
+                return;
+            }
             listener.onToken(NOT_FOUND_ANSWER);
+            listener.onFinalAnswer(NOT_FOUND_ANSWER);
             saveMemory(prepared, request.getQuestion(), NOT_FOUND_ANSWER);
             recordMissIfNeeded(NOT_FOUND_ANSWER, scope, request.getQuestion());
             chatSessionService.completeAnswer(scope.username(), request.getSessionId(),
                     NOT_FOUND_ANSWER, prepared.hits());
             listener.onComplete();
+            release.run();
             return;
         }
         StreamingCitationFilter citationFilter = new StreamingCitationFilter(prepared.hits().size());
         StringBuilder answerBuilder = new StringBuilder();
-        streamingChatModel.chat(prepared.messages(), new StreamingChatResponseHandler() {
+        try {
+            streamingChatModel.chat(prepared.messages(), new StreamingChatResponseHandler() {
             @Override
             public void onPartialResponse(String partialResponse) {
+                if (cancellation.isCancelled()) {
+                    return;
+                }
                 String safe = citationFilter.feed(partialResponse);
                 answerBuilder.append(safe);
-                if (!safe.isEmpty()) {
+                if (!safe.isEmpty() && !cancellation.isCancelled()) {
                     listener.onToken(safe);
                 }
             }
 
             @Override
             public void onCompleteResponse(ChatResponse completeResponse) {
+                if (cancellation.isCancelled()) {
+                    release.run();
+                    return;
+                }
                 String tail = citationFilter.flush();
                 answerBuilder.append(tail);
-                if (!tail.isEmpty()) {
+                if (!tail.isEmpty() && !cancellation.isCancelled()) {
                     listener.onToken(tail);
                 }
                 String answer = answerBuilder.toString();
@@ -180,18 +260,31 @@ public class RagService {
                 }
                 String finalAnswer = CitationValidator.validate(
                         sanitizeCitations(answer, prepared.hits().size()), RagAnswerHelper.chunkTexts(prepared.hits()));
+                if (cancellation.isCancelled()) {
+                    release.run();
+                    return;
+                }
+                listener.onFinalAnswer(finalAnswer);
                 saveMemory(prepared, request.getQuestion(), finalAnswer);
                 recordMissIfNeeded(finalAnswer, scope, request.getQuestion());
                 chatSessionService.completeAnswer(scope.username(), request.getSessionId(),
                         finalAnswer, prepared.hits());
                 listener.onComplete();
+                release.run();
             }
 
             @Override
             public void onError(Throwable error) {
-                listener.onError(error);
+                if (!cancellation.isCancelled()) {
+                    listener.onError(error);
+                }
+                release.run();
             }
         });
+        } catch (RuntimeException error) {
+            release.run();
+            throw error;
+        }
     }
 
     /**
@@ -287,6 +380,22 @@ public class RagService {
                 .maxMessages(MAX_MEMORY_MESSAGES)
                 .chatMemoryStore(chatMemoryStore)
                 .build();
+    }
+
+    private ReentrantLock sessionLock(AskRequest request, AskScope scope) {
+        if (request.getSessionId() == null || request.getSessionId().isBlank()) {
+            return new ReentrantLock();
+        }
+        String key = scope.username() + "|" + request.getSessionId() + "|" + String.valueOf(scope.department());
+        return sessionLocks.computeIfAbsent(key, ignored -> new ReentrantLock());
+    }
+
+    private void releaseSessionLock(AskRequest request, AskScope scope, ReentrantLock lock) {
+        lock.unlock();
+        if (request.getSessionId() != null && !request.getSessionId().isBlank() && !lock.hasQueuedThreads()) {
+            String key = scope.username() + "|" + request.getSessionId() + "|" + String.valueOf(scope.department());
+            sessionLocks.remove(key, lock);
+        }
     }
 
     /** 答案是“资料里没找到”就记一条知识盲区（检索无命中或模型明确说没有都算），记录失败在 service 内部吞掉。 */

@@ -65,13 +65,8 @@ public class ExportService {
             List<List<String>> out = new ArrayList<>();
             out.add(List.of("source", "chunks", "visibility", "status", "version"));
             jdbcTemplate.query(
-                    "SELECT metadata->>'source' AS source, count(*) AS chunks, "
-                            + "max(metadata->>'visibility') AS visibility, "
-                            + "max(COALESCE(metadata->>'status','approved')) AS status, "
-                            + "COALESCE(max(CAST(NULLIF(metadata->>'version','') AS INTEGER)), 1) AS version "
-                            + "FROM chunk_embedding WHERE metadata->>'source' IS NOT NULL "
-                            + "AND COALESCE(metadata->>'status','approved') <> 'superseded' "
-                            + "GROUP BY metadata->>'source' ORDER BY source LIMIT " + MAX_ROWS,
+                    "SELECT source, chunk_count, visibility, status, version FROM document_version "
+                            + "WHERE lifecycle_state = 'CURRENT' ORDER BY source LIMIT " + MAX_ROWS,
                     (rs, rowNum) -> List.of(rs.getString(1), String.valueOf(rs.getInt(2)),
                             rs.getString(3), rs.getString(4), String.valueOf(rs.getInt(5))))
                     .forEach(out::add);

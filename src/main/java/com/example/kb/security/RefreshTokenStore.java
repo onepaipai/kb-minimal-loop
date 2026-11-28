@@ -13,6 +13,16 @@ public interface RefreshTokenStore {
 
     Optional<RefreshTokenRow> find(String tokenHash);
 
+    /** 原子消费一个仍有效的 Refresh Token；并发请求只能有一个成功。 */
+    default Optional<RefreshTokenRow> consume(String tokenHash, Instant now) {
+        Optional<RefreshTokenRow> row = find(tokenHash);
+        if (row.isEmpty() || row.get().revoked() || !row.get().expiresAt().isAfter(now)) {
+            return Optional.empty();
+        }
+        revoke(tokenHash);
+        return Optional.of(row.get());
+    }
+
     void revoke(String tokenHash);
 
     void revokeAll(String username);

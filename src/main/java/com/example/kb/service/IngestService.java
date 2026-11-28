@@ -77,41 +77,59 @@ public class IngestService {
         if (content.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "文件内容为空");
         }
-        // 内容没变直接跳过：不重新向量化、不重复存块（哈希按原始字节算，换行符变了也算变了）
+        // 内容、可见性和目标状态都相同才跳过；否则即使字节相同也要更新权限/审批状态。
         String fileHash = sha256Hex(bytes);
-        if (fileHash.equals(documentManageService.findFileHash(fileName))) {
+        String currentVisibility = documentManageService.getVisibility(fileName);
+        String currentStatus = documentManageService.currentStatus(fileName);
+        if (fileHash.equals(documentManageService.findFileHash(fileName))
+                && visibility.equals(currentVisibility) && status.equals(currentStatus)) {
             return IngestResponse.skipped(fileName, documentManageService.countBySource(fileName),
                     visibility, status);
         }
-        int version = documentManageService.nextVersion(fileName);
+        String batch = UUID.randomUUID().toString();
+        int version = documentManageService.reserveVersion(fileName, batch, fileHash, visibility, status, null);
         Metadata metadata = new Metadata();
         metadata.put(MetadataKeys.SOURCE, fileName);
         metadata.put(MetadataKeys.FILE_HASH, fileHash);
         metadata.put(MetadataKeys.VISIBILITY, visibility);
-        metadata.put(MetadataKeys.BATCH, UUID.randomUUID().toString());
+        metadata.put(MetadataKeys.BATCH, batch);
         // 先以 pending 入库（问答查不到）：入库中途断了旧版还活着，发布那一步再一个事务里改成目标状态并 supersede 旧版
         metadata.put(MetadataKeys.STATUS, "pending");
         metadata.put(MetadataKeys.VERSION, String.valueOf(version));
-        Document document;
-        if (fileName.endsWith(TEXT_SUFFIX) || fileName.endsWith(MARKDOWN_SUFFIX)) {
-            document = Document.from(content, metadata);
-        } else {
-            document = parseWithTika(bytes, metadata);
+        try {
+            Document document;
+            if (fileName.endsWith(TEXT_SUFFIX) || fileName.endsWith(MARKDOWN_SUFFIX)) {
+                document = Document.from(content, metadata);
+            } else {
+                document = parseWithTika(bytes, metadata);
+            }
+            // 空内容校验放在解析之后：扫描版 PDF、纯空表格的 Word 解析不出文本，不允许静默存 0 块；
+            // 扫描版 PDF 要读出文字需机器装 Tesseract（OCR 由 Tika 调它做，没装时这里就是空）
+            if (document.text().isBlank()) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                        "文件解析后无有效文本内容（可能是扫描版 PDF：服务器需安装 Tesseract 才支持 OCR，或为空文档）");
+            }
+            // 向量、原件或发布任一步失败，都按 batch 精确清理，允许用户安全重试。
+            embeddingStoreIngestor.ingest(document);
+            if (saveBlob) {
+                saveBlob(fileHash, fileName, version, bytes);
+            }
+            documentManageService.publishVersion(fileName, batch, status);
+            return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility, status);
+        } catch (Exception error) {
+            try {
+                documentManageService.removeByBatch(batch, fileName, version);
+            } catch (Exception cleanupError) {
+                log.error("失败批次清理失败 source={} batch={}", fileName, batch, cleanupError);
+            }
+            if (error instanceof IOException ioException) {
+                throw ioException;
+            }
+            if (error instanceof RuntimeException runtimeException) {
+                throw runtimeException;
+            }
+            throw new IOException("文档入库失败", error);
         }
-        // 空内容校验放在解析之后：扫描版 PDF、纯空表格的 Word 解析不出文本，不允许静默存 0 块；
-        // 扫描版 PDF 要读出文字需机器装 Tesseract（OCR 由 Tika 调它做，没装时这里就是空）
-        if (document.text().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
-                    "文件解析后无有效文本内容（可能是扫描版 PDF：服务器需安装 Tesseract 才支持 OCR，或为空文档）");
-        }
-        // 先入后发布：新块入库成功才一个事务里改成目标状态并把旧版标成 superseded（不删，留着回滚），
-        // 入库中途失败（向量接口报错、断库）旧版不动，新版 pending 不可见
-        embeddingStoreIngestor.ingest(document);
-        if (saveBlob) {
-            saveBlob(fileHash, fileName, version, bytes);
-        }
-        documentManageService.publishVersion(fileName, metadata.getString(MetadataKeys.BATCH), status);
-        return IngestResponse.of(fileName, documentManageService.countBySource(fileName), visibility, status);
     }
 
     /** 保存原件供下载；失败只记 WARN 不影响入库主流程（与审计/通知同一策略）。 */

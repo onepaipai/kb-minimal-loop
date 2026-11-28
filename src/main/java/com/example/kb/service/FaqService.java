@@ -102,12 +102,36 @@ public class FaqService {
                         + "FROM standard_answer WHERE " + where + " ORDER BY updated_at DESC",
                 (rs, rowNum) -> mapRow(rs), params.toArray());
         String normalizedQuestion = question.trim().toLowerCase(Locale.ROOT);
+        FaqEntry keywordMatch = null;
+        int keywordLength = -1;
         for (FaqEntry candidate : candidates) {
-            if (matches(candidate, normalizedQuestion)) {
+            String candidateQuestion = candidate.question().trim().toLowerCase(Locale.ROOT);
+            if (candidateQuestion.equals(normalizedQuestion)) {
                 return Optional.of(candidate);
             }
+            int matchedLength = longestMatchedKeyword(candidate, normalizedQuestion);
+            if (matchedLength > keywordLength) {
+                keywordLength = matchedLength;
+                keywordMatch = candidate;
+            }
         }
-        return Optional.empty();
+        return keywordMatch == null ? Optional.empty() : Optional.of(keywordMatch);
+    }
+
+    /** 返回命中的最长关键词长度，避免短而宽泛的关键词覆盖更具体的标准答案。 */
+    private static int longestMatchedKeyword(FaqEntry candidate, String normalizedQuestion) {
+        int longest = -1;
+        String keywords = candidate.keywords();
+        if (keywords == null || keywords.isBlank()) {
+            return longest;
+        }
+        for (String keyword : keywords.split("[,，;；]")) {
+            String trimmed = keyword.trim().toLowerCase(Locale.ROOT);
+            if (trimmed.length() >= 2 && normalizedQuestion.contains(trimmed)) {
+                longest = Math.max(longest, trimmed.length());
+            }
+        }
+        return longest;
     }
 
     /** 命中判断：原文一致（忽略大小写）或问题里包含任一关键词（忽略大小写）。 */

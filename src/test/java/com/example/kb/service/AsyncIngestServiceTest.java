@@ -57,6 +57,6 @@ class AsyncIngestServiceTest {
                 "a.txt", false, "all", "approved", "alice");
         assertEquals("PENDING", job.status());
         assertEquals("a.txt", job.source());
-        verify(jobRunner).run(eq(job.id()), any(), eq("a.txt"), eq(false), eq("all"), eq("approved"));
+        verify(jobRunner).run(eq(job.id()));
     }
 }

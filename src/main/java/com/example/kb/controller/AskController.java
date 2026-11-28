@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 
+import com.example.kb.common.RequestValidation;
 import com.example.kb.common.Visibility;
 import com.example.kb.dto.AskRequest;
 import com.example.kb.dto.AskResponse;
@@ -64,18 +65,23 @@ public class AskController {
         RagService.AskScope scope = DepartmentScope.askScope(DepartmentScope.currentUser(), request.getDepartment());
         auditService.record(scope.username(), "ASK", request.getSessionId(), request.getQuestion());
         SseEmitter emitter = new SseEmitter(SSE_TIMEOUT_MILLIS);
+        RagService.StreamCancellation cancellation = new RagService.StreamCancellation();
         CompletableFuture<Void> future = CompletableFuture.runAsync(
-                () -> streamTo(request, scope, emitter), streamExecutor);
-        Runnable stop = () -> future.cancel(true);
+                () -> streamTo(request, scope, emitter, cancellation), streamExecutor);
+        Runnable stop = () -> {
+            cancellation.cancel();
+            future.cancel(true);
+        };
         emitter.onCompletion(stop);
         emitter.onTimeout(stop);
         emitter.onError(error -> stop.run());
         return emitter;
     }
 
-    private void streamTo(AskRequest request, RagService.AskScope scope, SseEmitter emitter) {
+    private void streamTo(AskRequest request, RagService.AskScope scope, SseEmitter emitter,
+                          RagService.StreamCancellation cancellation) {
         try {
-            ragService.askStream(request, scope, sseListener(emitter));
+            ragService.askStream(request, scope, sseListener(emitter), cancellation);
         } catch (Exception e) {
             emitter.completeWithError(e);
         }
@@ -91,6 +97,11 @@ public class AskController {
             @Override
             public void onToken(String token) {
                 sendEvent(emitter, EVENT_TOKEN, token);
+            }
+
+            @Override
+            public void onFinalAnswer(String answer) {
+                sendEvent(emitter, "final", answer);
             }
 
             @Override
@@ -119,9 +130,7 @@ public class AskController {
 
     /** /api/ask 与 /api/ask-stream 共用的入参校验，越界一律 400；部门代号在入口统一小写并校验，prepare() 直接用。 */
     private void validateAskRequest(AskRequest request) {
-        if (request.getQuestion() == null || request.getQuestion().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "question 不能为空");
-        }
+        RequestValidation.validateAsk(request);
         if (request.getDepartment() != null) {
             request.setDepartment(Visibility.normalize(request.getDepartment()));
         }

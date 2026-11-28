@@ -15,14 +15,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 
-/**
- * 知识库文档管理服务：已入库文档清单与按文档删除、审批状态与版本号。
- * 状态：pending 待审批、approved 已发布、rejected 已驳回；缺 status 的老块按已发布算（与回填 SQL 一致）。
- */
+/** 知识库文档管理服务：清单、版本、审批、回滚、批次补偿和原件生命周期。 */
 @Service
 public class DocumentManageService {
-
-    private static final String TABLE = "chunk_embedding";
 
     private final JdbcTemplate jdbcTemplate;
     private final EmbeddingStore<TextSegment> embeddingStore;
@@ -37,47 +32,53 @@ public class DocumentManageService {
         this.documentVersionQueryHelper = new DocumentVersionQueryHelper(jdbcTemplate, embeddingStore);
     }
 
-    /**
-     * 按 metadata 里的 source 分组统计已入库文档与块数，再按 visibility 过滤并分页：
-     * 不传 department 只列全员可见的，传了列全员可见加该部门的。
-     * includePending 为 false 时只列已发布的（普通用户与编辑的清单）；管理员与部门管理员传 true 看全部，
-     * 再用 status 参数筛待审批/已发布/已驳回。未回填 visibility 的旧文档不列出，回填 SQL 见 docs/architecture.md。
-     */
+    /** 按版本事实表列出每个 source 的当前版或待审批候选版。 */
     public DocumentListResponse listDocuments(String department, int page, int size,
                                               String status, boolean includePending) {
-        String visibilityCondition = buildVisibilityCondition(department);
-        List<Object> params = new ArrayList<>(List.of(buildVisibilityParams(department)));
-        // 已 superseded 的旧版块不进清单（块数与版本号都只算当前版）；状态筛子本身也碰不到它
-        StringBuilder where = new StringBuilder("metadata->>'source' IS NOT NULL AND " + visibilityCondition
-                + " AND COALESCE(metadata->>'status','approved') <> 'superseded'");
-        // 状态条件：指定了 status 就按它筛（缺字段的老块按 approved 算）；不指定时看调用方要不要待审批的
+        StringBuilder visibility = new StringBuilder();
+        List<Object> visibilityParams = new ArrayList<>();
+        if (department == null) {
+            visibility.append("dv.visibility = ?");
+            visibilityParams.add(Visibility.ALL);
+        } else {
+            visibility.append("dv.visibility IN (?, ?)");
+            visibilityParams.add(Visibility.ALL);
+            visibilityParams.add(department);
+        }
+        StringBuilder selection = new StringBuilder("SELECT DISTINCT ON (dv.source) dv.source, dv.visibility, "
+                + "dv.status, dv.version, dv.chunk_count, "
+                + "EXISTS (SELECT 1 FROM document_blob b WHERE b.source = dv.source AND b.version = dv.version) AS has_blob "
+                + "FROM document_version dv WHERE ").append(visibility);
+        List<Object> params = new ArrayList<>(visibilityParams);
+        selection.append(" AND dv.lifecycle_state <> 'FAILED'");
         if (status != null && !status.isBlank()) {
-            where.append(" AND COALESCE(metadata->>'status','approved') = ?");
+            selection.append(" AND dv.status = ?");
             params.add(status.trim().toLowerCase());
         } else if (!includePending) {
-            where.append(" AND COALESCE(metadata->>'status','approved') = 'approved'");
+            selection.append(" AND dv.lifecycle_state = 'CURRENT' AND dv.status = 'approved'");
+        } else {
+            selection.append(" AND dv.lifecycle_state IN ('CURRENT','PENDING','PROCESSING')");
         }
-        Integer total = jdbcTemplate.queryForObject(
-                "SELECT count(DISTINCT metadata->>'source') FROM " + TABLE + " WHERE " + where,
-                Integer.class, params.toArray());
-        String sql = "SELECT metadata->>'source' AS source, max(metadata->>'visibility') AS visibility, "
-                + "count(*) AS chunks, max(COALESCE(metadata->>'status','approved')) AS status, "
-                + "COALESCE(max(CAST(NULLIF(metadata->>'version','') AS INTEGER)), 1) AS version, "
-                + "EXISTS (SELECT 1 FROM document_blob b WHERE b.source = metadata->>'source') AS has_blob FROM " + TABLE
-                + " WHERE " + where
-                + " GROUP BY metadata->>'source' ORDER BY source LIMIT ? OFFSET ?";
-        params.add(size);
-        params.add(page * size);
+        selection.append(" ORDER BY dv.source, CASE WHEN dv.lifecycle_state IN ('PENDING','PROCESSING') "
+                + "THEN 0 ELSE 1 END, dv.version DESC");
+
+        String countSql = "SELECT count(*) FROM (" + selection + ") selected";
+        Integer total = jdbcTemplate.queryForObject(countSql, Integer.class, params.toArray());
+        String sql = "SELECT source, visibility, status, version, chunk_count, has_blob FROM (" + selection
+                + ") selected LIMIT ? OFFSET ?";
+        List<Object> pageParams = new ArrayList<>(params);
+        pageParams.add(size);
+        pageParams.add(page * size);
         List<DocumentSummary> documents = jdbcTemplate.query(sql, (rs, rowNum) -> {
             DocumentSummary summary = new DocumentSummary();
             summary.setSource(rs.getString("source"));
             summary.setVisibility(rs.getString("visibility"));
-            summary.setChunks(rs.getInt("chunks"));
+            summary.setChunks(rs.getInt("chunk_count"));
             summary.setStatus(rs.getString("status"));
             summary.setVersion(rs.getInt("version"));
             summary.setHasBlob(rs.getBoolean("has_blob"));
             return summary;
-        }, params.toArray());
+        }, pageParams.toArray());
         DocumentListResponse response = new DocumentListResponse();
         response.setDocuments(documents);
         response.setTotal(total == null ? 0 : total);
@@ -86,72 +87,81 @@ public class DocumentManageService {
         return response;
     }
 
-    private String buildVisibilityCondition(String department) {
-        return documentVersionQueryHelper.buildVisibilityCondition(department);
-    }
-
-    private Object[] buildVisibilityParams(String department) {
-        return documentVersionQueryHelper.buildVisibilityParams(department);
-    }
-
-    /** 某篇文档的可见性（审批与删除的权限判断用）；不存在返回 null。 */
     public String getVisibility(String source) {
         return documentVersionQueryHelper.getVisibility(source);
     }
 
-    /** 某篇文档当前版的审批状态（回滚后同步条目行状态用）；不存在返回 null，块没存状态按 approved 算。 */
+    public String getCandidateVisibility(String source) {
+        return documentVersionQueryHelper.getCandidateVisibility(source);
+    }
+
+    public String getVersionVisibility(String source, int version) {
+        return documentVersionQueryHelper.getVersionVisibility(source, version);
+    }
+
+    public String getVersionStatus(String source, int version) {
+        return documentVersionQueryHelper.getVersionStatus(source, version);
+    }
+
+    public boolean hasDocument(String source) {
+        return getVisibility(source) != null || documentVersionQueryHelper.getCandidateVisibility(source) != null;
+    }
+
+    /** 跨文件上传与在线条目的 source 占用保护，利用 document 主键完成原子抢占。 */
+    public boolean reserveSource(String source) {
+        return jdbcTemplate.update("INSERT INTO document(source, next_version) VALUES (?, 1) "
+                + "ON CONFLICT (source) DO NOTHING", source) > 0;
+    }
+
+    public void releaseSourceIfEmpty(String source) {
+        jdbcTemplate.update("DELETE FROM document WHERE source = ? AND current_version IS NULL "
+                        + "AND NOT EXISTS (SELECT 1 FROM document_version WHERE document_version.source = document.source)",
+                source);
+    }
+
     public String currentStatus(String source) {
         return documentVersionQueryHelper.currentStatus(source);
     }
 
-    /** 某篇文档当前版本的文件哈希（去重用）：只看未被 superseded 的现行版，没有块或老块没存哈希时返回 null。 */
     public String findFileHash(String source) {
         return documentVersionQueryHelper.findFileHash(source);
     }
 
-    /** 同名替换的下一个版本号：已有最大版本 +1，首版为 1。 */
+    public int reserveVersion(String source, String batch, String fileHash, String visibility,
+                              String status, String username) {
+        return documentVersionQueryHelper.reserveVersion(source, batch, fileHash, visibility, status, username);
+    }
+
+    /** 兼容历史调用方；新入库使用 reserveVersion 避免并发版本冲突。 */
     public int nextVersion(String source) {
         return documentVersionQueryHelper.nextVersion(source);
     }
 
-    /** 某篇文档的当前版本号（最大版，含已 superseded 的旧版）；不存在返回 0。 */
     public int currentVersion(String source) {
         return documentVersionQueryHelper.currentVersion(source);
     }
 
-    /** 某篇文档的全部版本号（从小到大，含已 superseded 的旧版），回滚下拉框用；不存在返回空列表。 */
     public List<Integer> listVersions(String source) {
         return documentVersionQueryHelper.listVersions(source);
     }
 
-    /** 审批：当前版本的块统一改状态，返回改动的块数（0 表示文档不存在）；已 superseded 的旧版不动。 */
     public int setStatus(String source, String status) {
         return documentVersionQueryHelper.setStatus(source, status);
     }
 
-    /**
-     * 回滚到指定版本：目标版恢复成它被替换之前的状态（prev_status，缺失按 approved 算），当前版改成 superseded。
-     * 目标版不存在或就是当前版时抛错；返回恢复的块数。
-     */
+    @Transactional
     public int rollback(String source, int version) {
         return documentVersionQueryHelper.rollback(source, version);
     }
 
-    /** 待审批的文档数（总览仪表盘用）：department 为 null 只算全员可见的。 */
     public int countPending(String department) {
         return documentVersionQueryHelper.countPending(department);
     }
 
-    /**
-     * 统计指定 source 的当前版块数（已 superseded 的旧版不算）。Postgres 的 count(*) 返回 bigint，用 Long 接收避免类型窄化问题。
-     */
     public int countBySource(String source) {
         return documentVersionQueryHelper.countBySource(source);
     }
 
-    /**
-     * 删除指定文档的全部块（含已 superseded 的旧版），deletedChunks 为删除前后统计差值（实际删除量）。
-     */
     public DeleteDocumentResponse deleteDocument(String source) {
         DeleteDocumentResponse response = documentVersionQueryHelper.deleteDocument(source);
         if (response.isDeleted()) {
@@ -160,68 +170,47 @@ public class DocumentManageService {
         return response;
     }
 
-    /** 在线文本预览：按块号顺序拼回当前版全文（切块带了章节前缀，非原始排版）。 */
     public String previewText(String source) {
         return previewText(source, null);
     }
 
-    /** 指定版本取全文：version 为 null 取当前版；版本号在块 metadata 里，旧版标了 superseded 后仍可按版本读。 */
     public String previewText(String source, Integer version) {
-        StringBuilder sql = new StringBuilder("SELECT COALESCE(text, '') FROM " + TABLE
-                + " WHERE metadata->>'source' = ? ");
-        List<Object> params = new ArrayList<>();
-        params.add(source);
-        if (version == null) {
-            sql.append("AND COALESCE(metadata->>'status','approved') <> 'superseded' ");
-        } else {
-            sql.append("AND CAST(NULLIF(metadata->>'version','') AS INTEGER) = ? ");
-            params.add(version);
+        if (version != null && version < 1) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "version 必须大于 0");
         }
-        sql.append("ORDER BY CAST(NULLIF(metadata->>'chunk_index','') AS INTEGER)");
-        List<String> parts = jdbcTemplate.queryForList(sql.toString(), String.class, params.toArray());
-        return String.join("\n\n", parts);
+        return documentVersionQueryHelper.previewText(source, version);
     }
 
-    /** 删指定 source 的全部块，供删除接口复用。 */
     public void removeBySource(String source) {
         documentVersionQueryHelper.removeBySource(source);
         documentBlobService.deleteBySource(source);
+        jdbcTemplate.update("DELETE FROM document_version WHERE source = ?", source);
+        jdbcTemplate.update("DELETE FROM document WHERE source = ?", source);
     }
 
-    /**
-     * 同名替换的第二步：旧版块不删，改成 superseded（问答与清单自动排除），同时把改之前的状态记到 prev_status，
-     * 回滚时按它恢复（没批过的旧版回滚后还是待审批，不会悄悄发布）。
-     * 用 SQL 而不用 Filter：旧块可能没有 batch 字段，Filter 的不等于匹配不到 NULL，COALESCE 才能兜住。
-     */
-    public int markSuperseded(String source, String keepBatch) {
-        return documentVersionQueryHelper.markSuperseded(source, keepBatch);
+    public void removeByBatch(String batch, String source, int version) {
+        documentVersionQueryHelper.removeByBatch(batch);
+        documentBlobService.deleteVersion(source, version);
     }
 
-    /**
-     * 同名替换的发布一步：新版块先以 pending 入库（问答查不到），这里一个事务里把它改成目标状态，
-     * 同时把其余旧版标成 superseded。入库中途断了（向量接口报错、断库）发布没跑，旧版还活着、新版不可见，
-     * 问答不会同时看到新旧两版；发布本身是原子的，断在中间会整体回滚。
-     */
     @Transactional
     public void publishVersion(String source, String batch, String status) {
         documentVersionQueryHelper.publishVersion(source, batch, status);
     }
 
-    /**
-     * 条目分类与标签回填：写到指定版块的元数据上（其余版本不带），文档清单按它们展示与筛。
-     * category 与 tags 都为空时不做任何更新。
-     */
+    public int markSuperseded(String source, String keepBatch) {
+        return documentVersionQueryHelper.markSuperseded(source, keepBatch);
+    }
+
     public void attachTagsAndCategory(String source, int version, String category, String tags) {
         documentVersionQueryHelper.attachTagsAndCategory(source, version, category, tags);
     }
 
-    /** 改当前版可见性（批量改可见性用）；旧版不动，回滚后仍是原来的可见性。 */
     public int updateVisibility(String source, String visibility) {
         return documentVersionQueryHelper.updateVisibility(source, visibility);
     }
 
-    /** null 或纯空白返回 null，其余返回去空格后的值。 */
-    static String blankToNull(String value) {
+    public static String blankToNull(String value) {
         if (value == null) {
             return null;
         }
@@ -232,15 +221,8 @@ public class DocumentManageService {
         return trimmed;
     }
 
-    /**
-     * 清理旧版：每篇文档只保留最新 keep 个 superseded 旧版，更早的彻底删除（回滚只认保留的版本）。
-     * 只删 superseded 的块，当前版（pending/approved/rejected）永远不动；返回删除的块数。
-     */
     public int purgeOldSuperseded(int keep) {
-        int deleted = documentVersionQueryHelper.purgeOldSuperseded(keep);
-        if (deleted > 0) {
-            documentBlobService.purgeOld(keep);
-        }
-        return deleted;
+        documentBlobService.purgeOld(keep);
+        return documentVersionQueryHelper.purgeOldSuperseded(keep);
     }
 }

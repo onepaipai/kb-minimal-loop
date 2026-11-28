@@ -85,7 +85,7 @@ class DocumentBatchControllerTest {
 
     @Test
     void batchReviewPassesStatusAndReasonToService() {
-        when(documentManageService.getVisibility(anyString())).thenReturn("all");
+        when(documentManageService.getCandidateVisibility(anyString())).thenReturn("all");
         when(documentBatchService.review(any(), anyString(), anyString(), any())).thenReturn(
                 java.util.Map.of("requested", 1, "reviewed", List.of("a.txt"), "failed", List.of()));
         DocumentBatchReviewRequest request = new DocumentBatchReviewRequest();

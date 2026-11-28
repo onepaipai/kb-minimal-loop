@@ -5,6 +5,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.example.kb.common.RequestValidation;
 import com.example.kb.common.Visibility;
 import com.example.kb.dto.AskRequest;
 import com.example.kb.dto.ReferenceHit;
@@ -60,9 +61,7 @@ public class SearchController {
 
     /** 两个公开接口共用的校验与检索：入口统一归一 department、校验越界参数。 */
     private List<ReferenceHit> doSearch(AskRequest request) {
-        if (request.getQuestion() == null || request.getQuestion().isBlank()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "question 不能为空");
-        }
+        RequestValidation.validateAsk(request);
         if (request.getDepartment() != null) {
             request.setDepartment(Visibility.normalize(request.getDepartment()));
         }

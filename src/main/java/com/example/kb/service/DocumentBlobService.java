@@ -86,9 +86,11 @@ public class DocumentBlobService {
         jdbcTemplate.update("DELETE FROM document_blob WHERE source = ?", source);
     }
 
-    /** 清理旧版原件：每篇只保留最新 keep 个版本，与块清理（purgeOldSuperseded）同一条件。 */
+    /** 清理旧版原件：只清理版本事实表中明确标记为旧版且超出保留数的原件。 */
     public void purgeOld(int keep) {
-        jdbcTemplate.update("DELETE FROM document_blob b WHERE b.version <= "
-                + "(SELECT COALESCE(max(version), 0) - ? FROM document_blob WHERE source = b.source)", keep);
+        jdbcTemplate.update("DELETE FROM document_blob b WHERE (b.source, b.version) IN ("
+                + "SELECT source, version FROM (SELECT source, version, row_number() OVER "
+                + "(PARTITION BY source ORDER BY version DESC) AS rn FROM document_version "
+                + "WHERE lifecycle_state = 'SUPERSEDED') ranked WHERE rn > ?)", keep);
     }
 }

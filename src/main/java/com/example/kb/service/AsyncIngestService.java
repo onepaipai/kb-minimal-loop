@@ -18,8 +18,13 @@ public class AsyncIngestService {
 
     public IngestJobStore.IngestJob submit(byte[] bytes, String fileName, boolean isJava,
                                            String visibility, String status, String username) {
-        IngestJobStore.IngestJob job = jobStore.create(fileName, username, visibility);
-        jobRunner.run(job.id(), bytes, fileName, isJava, visibility, status);
+        IngestJobStore.IngestJob job = jobStore.createWithPayload(fileName, username, visibility, isJava, status, bytes);
+        try {
+            jobRunner.run(job.id());
+        } catch (RuntimeException error) {
+            jobStore.updateStatus(job.id(), "FAILED", null, "任务提交失败：" + error.getMessage());
+            throw error;
+        }
         return job;
     }
 }

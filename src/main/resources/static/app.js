@@ -17,7 +17,9 @@ let auditPage = 0;
 let notifPage = 0;
 let asking = false;
 let activeAskController = null;
+let refreshPromise = null;
 let currentSessionId = null;
+let sessionRequestToken = 0;
 /* 会话与消息缓存在内存里，唯一事实来源是服务端（跨设备同步） */
 let cachedSessions = [];
 let cachedMessages = [];
@@ -85,23 +87,33 @@ function doApi(path, method, body, isForm) {
 
 /** 用 Refresh Token 换一对新 Token；成功返回 true，失败返回 false（不抛错，调用方决定回登录页）。 */
 async function tryRefresh() {
-    const refreshToken = localStorage.getItem(REFRESH_KEY);
-    if (!refreshToken) {
-        return false;
+    if (refreshPromise) {
+        return refreshPromise;
     }
-    try {
-        const response = await fetch('/api/auth/refresh', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ refreshToken }),
-        });
-        if (!response.ok) {
+    refreshPromise = (async () => {
+        const refreshToken = localStorage.getItem(REFRESH_KEY);
+        if (!refreshToken) {
             return false;
         }
-        saveSession(await response.json());
-        return true;
-    } catch (e) {
-        return false;
+        try {
+            const response = await fetch('/api/auth/refresh', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ refreshToken }),
+            });
+            if (!response.ok) {
+                return false;
+            }
+            saveSession(await response.json());
+            return true;
+        } catch (e) {
+            return false;
+        }
+    })();
+    try {
+        return await refreshPromise;
+    } finally {
+        refreshPromise = null;
     }
 }
 
@@ -230,7 +242,10 @@ async function loadDashboard() {
 /* ---------------- 会话（服务端保存，跨设备同步） ---------------- */
 
 function newSessionId() {
-    return 'web-' + Math.random().toString(36).slice(2, 10);
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return 'web-' + window.crypto.randomUUID();
+    }
+    return 'web-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 10);
 }
 
 /** 从服务端拉会话清单；当前会话不在清单里时自动切到最近更新的那个。 */
@@ -242,7 +257,7 @@ async function refreshSessionList() {
         return;
     }
     const currentExists = cachedSessions.some((s) => s.id === currentSessionId);
-    if (cachedSessions.length > 0 && !currentExists) {
+    if (cachedSessions.length > 0 && !currentExists && cachedMessages.length === 0 && !asking) {
         await openSession(cachedSessions[0].id);
         return;
     }
@@ -251,12 +266,23 @@ async function refreshSessionList() {
 
 /** 打开某个会话：从服务端拉消息并渲染。 */
 async function openSession(sessionId) {
+    const requestToken = ++sessionRequestToken;
     currentSessionId = sessionId;
     try {
-        cachedMessages = mapServerMessages(await api('/api/sessions/' + encodeURIComponent(sessionId) + '/messages'));
+        const messages = await api('/api/sessions/' + encodeURIComponent(sessionId) + '/messages');
+        if (requestToken !== sessionRequestToken || currentSessionId !== sessionId) {
+            return;
+        }
+        cachedMessages = mapServerMessages(messages);
     } catch (e) {
+        if (requestToken !== sessionRequestToken || currentSessionId !== sessionId) {
+            return;
+        }
         cachedMessages = [];
         showMessage(e.message);
+    }
+    if (requestToken !== sessionRequestToken || currentSessionId !== sessionId) {
+        return;
     }
     renderSessionList();
     renderMessages();
@@ -671,6 +697,12 @@ async function askStream(request, bubble, signal) {
                     }
                     answer += data;
                     textEl.appendChild(document.createTextNode(data));
+                    queueScroll();
+                } else if (event === 'final') {
+                    firstToken = true;
+                    answer = data;
+                    textEl.classList.remove('typing');
+                    textEl.textContent = data;
                     queueScroll();
                 } else if (event === 'error') {
                     throw new Error(data || '流式回答失败');
@@ -1601,7 +1633,7 @@ $('askForm').addEventListener('submit', async (e) => {
             ? await askStream(request, bubble, controller.signal)
             : await askOnce(request, bubble);
         // 流式期间用户可能已切到别的会话：答案只进发起提问的那个会话的缓存
-        if (askedSessionId === currentSessionId) {
+        if (askedSessionId === currentSessionId && !result.stopped) {
             cachedMessages.push({ role: 'assistant', text: result.answer,
                 hits: result.hits || [], question });
         }

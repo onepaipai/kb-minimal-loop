@@ -47,6 +47,8 @@ class IngestServiceTest {
     void sameContentSkipsWithoutEmbedding() throws Exception {
         byte[] bytes = "请假制度：年假十五天。".getBytes(StandardCharsets.UTF_8);
         when(documentManageService.findFileHash("a.txt")).thenReturn(IngestService.sha256Hex(bytes));
+        when(documentManageService.getVisibility("a.txt")).thenReturn("all");
+        when(documentManageService.currentStatus("a.txt")).thenReturn("approved");
         when(documentManageService.countBySource("a.txt")).thenReturn(3);
         IngestService service = new IngestService(documentSplitter, embeddingModel, embeddingStore,
                 documentManageService, documentBlobService);
@@ -63,7 +65,8 @@ class IngestServiceTest {
     void changedContentReingestsAndStoresHash() throws Exception {
         byte[] bytes = "请假制度：年假十五天。".getBytes(StandardCharsets.UTF_8);
         when(documentManageService.findFileHash("a.txt")).thenReturn("old-hash");
-        when(documentManageService.nextVersion("a.txt")).thenReturn(1);
+        when(documentManageService.reserveVersion(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
+                .thenReturn(1);
         when(documentManageService.countBySource("a.txt")).thenReturn(2);
         // 模拟真实切块器：段带上文档元数据（含 file_hash）。
         // 注意：EmbeddingStoreIngestor 调的是 splitAll（默认方法会调 split，但 mock 不走默认方法），所以要 stub splitAll
@@ -99,7 +102,8 @@ class IngestServiceTest {
         byte[] bytes = toBytes(workbook);
         workbook.close();
         when(documentManageService.findFileHash("假期.xlsx")).thenReturn(null);
-        when(documentManageService.nextVersion("假期.xlsx")).thenReturn(1);
+        when(documentManageService.reserveVersion(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
+                .thenReturn(1);
         when(documentManageService.countBySource("假期.xlsx")).thenReturn(1);
         when(documentSplitter.splitAll(anyList())).thenAnswer(inv -> {
             List<Document> documents = inv.getArgument(0);
@@ -128,7 +132,8 @@ class IngestServiceTest {
         byte[] bytes = toBytes(slideshow);
         slideshow.close();
         when(documentManageService.findFileHash("假期.pptx")).thenReturn(null);
-        when(documentManageService.nextVersion("假期.pptx")).thenReturn(1);
+        when(documentManageService.reserveVersion(anyString(), anyString(), anyString(), anyString(), anyString(), any()))
+                .thenReturn(1);
         when(documentManageService.countBySource("假期.pptx")).thenReturn(1);
         when(documentSplitter.splitAll(anyList())).thenAnswer(inv -> {
             List<Document> documents = inv.getArgument(0);
