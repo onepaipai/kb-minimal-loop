@@ -3,13 +3,15 @@
 ## 模块划分
 
 - `config/`：按提供方拆分。`ChatModelConfig`（DeepSeek 聊天 + 流式）、`EmbeddingConfig`（DashScope 向量）、`VectorStoreConfig`（pgvector）、`AsyncConfig`（`ingestExecutor` 异步入库 + `streamExecutor` SSE 流式问答两套有界线程池，互不拖垮）。Bean 方法名即 Bean 名，改名会影响注入；流式任务用 `@Qualifier("streamExecutor")` 注入。
-- `controller/`：按领域拆分。`IngestController`（入库）、`AskController`（问答 + 流式）、`SearchController`（仅检索，不调聊天模型）、`StatsController`（按天趋势，仅 ADMIN）、`BotController`（企微/钉钉机器人问答，X-API-Key 鉴权）、`DocumentController`（清单 + 删除 + 审批 + 回滚 + 版本）、`KnowledgeEntryController`（在线撰写知识条目）、`FaqController`（置顶标准答案）、`AuthController`（登录 + 改密码 + TOTP 双因素）、`OidcController`（OIDC 换码）、`AdminController`（用户管理 + 审计日志 + 反馈统计 + 盲区看板）、`ApiKeyController`（对外 API Key 管理）、`DepartmentController`（部门管理，仅 ADMIN）、`NotificationController`（站内通知）、`SessionController`（会话历史）、`FeedbackController`（问答反馈）。路由见 [接口](api.md)。 批量文档操作在 `DocumentBatchController`（批量删/审批/改可见性），执行逻辑下沉 `DocumentBatchService`。
+- `controller/`：按领域拆分。`IngestController`（入库）、`AskController`（问答 + 流式）、`SearchController`（仅检索，不调聊天模型）、`StatsController`（按天趋势，仅 ADMIN）、`BotController`（企微/钉钉机器人问答，X-API-Key 鉴权）、`DocumentController`（清单 + 删除 + 审批 + 回滚 + 版本）、`KnowledgeEntryController`（在线撰写知识条目）、`FaqController`（置顶标准答案）、`AuthController`（登录 + 改密码 + TOTP 双因素）、`OidcController`（OIDC 换码）、`AdminController`（用户管理 + 审计日志 + 反馈统计 + 盲区看板）、`ApiKeyController`（对外 API Key 管理）、`DepartmentController`（部门管理，仅 ADMIN）、`NotificationController`（站内通知）、`SessionController`（会话历史）、`ExportController`（数据导出）、`DocumentBatchController`（批量文档操作）、`MessageController`（消息删除与收藏）、`TagController`（分类与标签字典）、`FeedbackController`（问答反馈）。路由见 [接口](api.md)。 批量文档执行逻辑下沉 `DocumentBatchService`。
 - `service/`：文档链路 `IngestService`（文档入库）、`CodeIngestService`（Java 单文件入库）、`DocumentChunker`（结构感知切块，800/150）、`KnowledgeEntryService`（知识条目入库与版本）、`FaqService`（标准答案匹配）、`QuestionMissService`（知识盲区记录与聚合）；检索问答 `RagService`（检索问答；`retrieveChunks` 是唯一检索主干，`searchHits` 与 `prepare` 共用，改权限/检索规则只改一处）、`StreamingCitationFilter`（流式引用过滤，边收边删超范围编号）、`HybridSearchService`（向量 + 关键词两路并发、RRF 融合检索、同义词扩展、pg_trgm 模糊兜底）、`QueryEmbeddingCache`（问题向量 30 秒缓存）、`RerankClient`（重排接口）/`RerankService`（神经重排，失败回退 RRF）/`DashScopeRerankClient`（qwen3-rerank 直调）/`RerankConfig` + `RerankProperties`（重排配置）、`CitationValidator`（引用文本依据校验）；文档管理 `DocumentManageService`（清单/删除/审批状态/版本号/回滚/旧版清理）、`MetadataKeys`（块元数据键集中定义）、`DepartmentService`（部门注册表）、`DepartmentBootstrap`（启动时从已入库块回填部门）；支撑能力 `AsyncIngestService` + `IngestJobRunner` + `IngestJobStore`/`JdbcIngestJobStore`（异步入库）、`AuditService`（审计日志）、`FeedbackService`（问答反馈统计）、`NotificationService`（站内通知）、`ApiKeyService`（对外 API Key）、`ChatSessionService`（会话历史长期落库）、`JdbcChatMemoryStore`（喂模型的短期记忆）、`ChatMemoryCleanup`（过期会话与限流窗口定时清理）、`DocumentBlobService`（原件字节存 `document_blob` 表供下载，与版本同生命周期，`BLOB_ENABLED`/`BLOB_MAX_SIZE_MB` 可配）、`StatsService`（按天聚合反馈/盲区/入库趋势）、`ExportService`（四类数据集拼 CSV/JSON/Markdown）；`UserService` 在 `security/` 下。
 - `security/`：`SecurityConfig`（JWT 过滤链）、`JwtService`（签发/校验）、`JwtAuthenticationFilter`、`UserPrincipal`（登录身份）、`ApiKeyAuthFilter`（请求头 `X-API-Key` 鉴权，只对非管理接口生效，ask 范围限问答与清单）、`RateLimitFilter`（数据库固定窗口限流）、`DepartmentScope`（部门与角色权限集中判断）、`AdminBootstrap`（初始管理员播种）、`TotpService`（TOTP 双因素）、`PasswordPolicy`（密码策略）。
 - `common/exception/`：`GlobalExceptionHandler` 统一异常处理，`ErrorResponse` 统一错误体。
-- `dto/`：接口出入参，按交易隔离平铺（30 个类，含机器人与 IM 兼容协议）。
+- `dto/`：接口出入参，按交易隔离平铺，含机器人与 IM 兼容协议。
 - `src/test/`：单元测试（`VisibilityTest`、`DepartmentScopeTest`、`PasswordPolicyTest`、`RoleScopeTest`、`TotpServiceTest`、`HybridSearchServiceTest` 等，不依赖数据库），另有 `it/` 下的集成测试（鉴权、入库问答、审批，需真实库与 Key 才跑）；CI 见 `.github/workflows/ci.yml`。
 - `src/main/resources/static/`：前端企业级单页（`index.html`、`styles.css` 基础布局 + `theme.css` 设计系统覆盖层（CSS 变量、明暗主题、质感/焦点/三态/响应式）、`app.js` 主体 + `features.js`（下载/预览/批量删除/仅搜索/趋势图）+ `ui-enhance.js`（导出/批量审批/版本对比/收藏/标签/主题），原生 JS + fetch，无构建步骤；`features.js` 在 `app.js` 之前、`ui-enhance.js` 在最后加载，复用其全局 `api`/`$`/`currentUser` 等；样式为 Tabler v1.7.5 的 `tabler.min.css`（完整版，已内置 `[data-bs-theme=dark]` 变量），本地引入；问答区有加载/停止态、增量流式渲染、引用折叠卡片与回答后操作，中央对话气泡带角色/时间与收藏/复制/重新生成；会话与消息存服务端 `/api/sessions`、跨设备同步；13 个管理视图 + 收藏视图）；Spring Boot 默认 serving，`/` 打开即用，`/api/**` 之外的请求安全配置全部放行。
+
+文档删除采用回收站语义：`DELETE /api/document` 只标记 `document.deleted_at`，同时把当前/候选块状态投影为 `deleted`，问答与正常清单自动排除；恢复时还原删除前状态，永久删除仅管理员可用并清理块、版本、原件和关联知识条目。
 
 ## 数据流
 
@@ -60,7 +62,7 @@ JavaParser 只找边界，按 `Range` 行号切原文保留注释与格式：一
 | --- | --- |
 | 部署 | 不用 Docker，Windows 可跑；数据库走 Neon 云库直连端点 |
 | 模型 | 聊天与向量分开：DeepSeek 只做聊天（它没有公开 embedding 接口），向量走 DashScope |
-| 密钥 | 12 个敏感值全部走环境变量，不写死、不进 git（见 [部署](deployment.md)） |
+| 密钥 | 敏感配置全部通过环境变量注入，不写死、不进 git（见 [部署](deployment.md)） |
 | 表结构 | `schema.sql` 按依赖顺序建表并回填 `document`/`document_version`；向量库配置 `createTable=false`、`skipCreateVectorExtension=true`，不重复建表 |
 | 元数据 | `COMBINED_JSONB` 模式，对应 `schema.sql` 的 `metadata JSONB` 列；`source` 为文件名，是清单/删除/定向检索的键 |
 | Tika | 只用 `langchain4j-document-parser-apache-tika`（内嵌 Tika 3.2.3），严禁 Tika 4.x——改了 `Parser.parse` 签名，编译能过、运行时 `NoSuchMethodError` |

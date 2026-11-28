@@ -74,6 +74,46 @@ class DocumentBatchControllerTest {
     }
 
     @Test
+    void batchRestorePassesSourcesToService() {
+        when(documentManageService.getTrashVisibility(anyString())).thenReturn("all");
+        when(documentBatchService.restore(any(), any())).thenReturn(
+                java.util.Map.of("requested", 1, "restored", List.of("a.txt"), "failed", List.of()));
+        DocumentBatchDeleteRequest request = new DocumentBatchDeleteRequest();
+        request.setSources(List.of("a.txt"));
+
+        controller.batchRestore(request);
+
+        verify(documentBatchService).restore(eq(List.of("a.txt")), any());
+    }
+
+    @Test
+    void batchPermanentDeletePassesSourcesToService() {
+        when(documentManageService.getTrashVisibility(anyString())).thenReturn("all");
+        when(documentBatchService.permanentlyDelete(any(), any())).thenReturn(
+                java.util.Map.of("requested", 1, "deleted", List.of("a.txt"), "failed", List.of()));
+        DocumentBatchDeleteRequest request = new DocumentBatchDeleteRequest();
+        request.setSources(List.of("a.txt"));
+
+        controller.batchPermanentDelete(request);
+
+        verify(documentBatchService).permanentlyDelete(eq(List.of("a.txt")), any());
+    }
+
+    @Test
+    void batchPermanentDeleteRejectsNonAdmin() {
+        UserPrincipal user = new UserPrincipal("editor", "EDITOR", null);
+        SecurityContextHolder.getContext().setAuthentication(
+                new UsernamePasswordAuthenticationToken(user, null, List.of()));
+        DocumentBatchDeleteRequest request = new DocumentBatchDeleteRequest();
+        request.setSources(List.of("a.txt"));
+
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> controller.batchPermanentDelete(request));
+
+        assertEquals(HttpStatus.FORBIDDEN, error.getStatusCode());
+    }
+
+    @Test
     void batchReviewRejectsUnknownStatus() {
         DocumentBatchReviewRequest request = new DocumentBatchReviewRequest();
         request.setSources(List.of("a.txt"));

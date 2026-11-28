@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS document (
     next_version INTEGER NOT NULL DEFAULT 1,
     current_version INTEGER NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    deleted_at TIMESTAMPTZ NULL,
+    deleted_by TEXT NULL
 );
 CREATE TABLE IF NOT EXISTS document_version (
     source TEXT NOT NULL,
@@ -27,11 +29,18 @@ CREATE TABLE IF NOT EXISTS document_version (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     published_at TIMESTAMPTZ NULL,
+    superseded_at TIMESTAMPTZ NULL,
+    deleted_prev_status TEXT NULL,
     PRIMARY KEY (source, version)
 );
 CREATE INDEX IF NOT EXISTS document_version_source_state_idx
     ON document_version (source, lifecycle_state, version DESC);
 CREATE INDEX IF NOT EXISTS document_version_batch_idx ON document_version (batch);
+ALTER TABLE document ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ NULL;
+ALTER TABLE document ADD COLUMN IF NOT EXISTS deleted_by TEXT NULL;
+ALTER TABLE document_version ADD COLUMN IF NOT EXISTS superseded_at TIMESTAMPTZ NULL;
+ALTER TABLE document_version ADD COLUMN IF NOT EXISTS deleted_prev_status TEXT NULL;
+CREATE INDEX IF NOT EXISTS document_deleted_idx ON document (deleted_at) WHERE deleted_at IS NOT NULL;
 
 -- 兼容已有块：仅补齐缺失主表/版本记录，不覆盖应用已经建立的关系记录。
 INSERT INTO document(source, next_version, current_version)

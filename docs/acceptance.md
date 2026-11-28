@@ -6,7 +6,7 @@
 4. 问“请假超过3天找谁批？”回答“部门经理+HR 共同审批”并带 `[1]` 引用；问“食堂几点开”回答“资料里没找到”
 5. 多轮：同 sessionId 先问“请假超过3天找谁批？”再问“那1天以内的呢？”，第二轮能按资料答“向直属主管口头说明即可”且标注引用
 6. 定向检索：`sources:["报销制度.txt"]` 问“高铁能报多少钱？”能答“二等座实报实销”
-7. 删除：`DELETE /api/document?source=报销制度.txt` 返回的 `deletedChunks` 与清单中该文档块数一致，再查清单该项消失
+7. 删除：`DELETE /api/document?source=报销制度.txt` 返回的 `deletedChunks` 与清单中该文档块数一致，正常清单与问答查不到该项，回收站中仍可见
 8. 校验：question 为空、maxResults=0、minScore=2 均返回 400
 9. 重复上传：同一文件传两次，清单块数不翻倍（同名整体替换）；内容完全没变时第二次返回 `skipped=true`，不重新向量化；内容变了仍走替换、版本号 +1
 10. 接口异常返回统一错误体 `{"timestamp","status","message","path"}`，不含堆栈文本
@@ -74,3 +74,5 @@
 72. SSE 资源治理：`/api/ask-stream` 跑在独立 `streamExecutor`（与 ingestExecutor 隔离），不再用 commonPool；`SseEmitter` 注册 onCompletion/onTimeout/onError 取消后台任务；前端点"停止生成"或断开连接后，服务端不再继续向 emitter 写 token；正常完成时 cancel 无副作用
 73. CI 静态检查：push/PR 触发时除 `mvn -B verify` 外，还跑三个 JS 文件的 `node --check` 与验收清单编号连续/README 条数一致性检查；编号断档或条数不符时 CI 失败
 74. 批量操作分层：批量删/审批/改可见性集中在 `DocumentBatchController`（只做校验与权限预检）+ `DocumentBatchService`（执行），单条审批与批量审批共用 `reviewOne`；文档清单与审批结果行为与拆分前一致，`DocumentBatchControllerTest` / `DocumentBatchServiceTest` 通过
+75. 文档回收站：删除文档只移入回收站，正常清单与问答都查不到；管理员/部门管理员能按范围查看回收站并恢复，恢复后审批状态和原件仍保持；知识条目来源与文档一起隐藏，恢复后状态同步
+76. 回收站永久删除与批量操作：管理员可永久删除并清理块、版本、原件和关联条目；批量恢复/永久删除支持 1-50 条，先统一校验权限；普通用户不能访问回收站，部门管理员不能永久删除；审计日志记录 DELETE_DOC、RESTORE_DOC、PURGE_DOC

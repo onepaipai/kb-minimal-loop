@@ -26,11 +26,14 @@ public class TagController {
     public Map<String, Object> tags() {
         List<Map<String, Object>> categories = jdbcTemplate.queryForList(
                 "SELECT category AS name, count(*) AS cnt FROM knowledge_entry "
-                        + "WHERE category IS NOT NULL AND category <> '' GROUP BY category ORDER BY cnt DESC LIMIT 100");
+                        + "WHERE category IS NOT NULL AND category <> '' AND NOT EXISTS ("
+                        + "SELECT 1 FROM document d WHERE d.source = knowledge_entry.source AND d.deleted_at IS NOT NULL) "
+                        + "GROUP BY category ORDER BY cnt DESC LIMIT 100");
         List<Map<String, Object>> tags = jdbcTemplate.queryForList(
                 "SELECT btrim(tag) AS name, count(*) AS cnt FROM ("
                         + "SELECT unnest(string_to_array(tags, ',')) AS tag FROM knowledge_entry "
-                        + "WHERE tags IS NOT NULL AND tags <> ''"
+                        + "WHERE tags IS NOT NULL AND tags <> '' AND NOT EXISTS ("
+                        + "SELECT 1 FROM document d WHERE d.source = knowledge_entry.source AND d.deleted_at IS NOT NULL)"
                         + ") t WHERE tag IS NOT NULL AND btrim(tag) <> '' "
                         + "GROUP BY btrim(tag) ORDER BY cnt DESC LIMIT 100");
         return Map.of("categories", categories, "tags", tags);

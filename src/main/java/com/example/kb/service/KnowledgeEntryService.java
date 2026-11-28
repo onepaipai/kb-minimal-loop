@@ -192,7 +192,8 @@ public class KnowledgeEntryService {
     /** 带分类/标签筛选的清单：category 精确匹配，tags 用逗号分隔后任一命中（LIKE）。 */
     public List<KnowledgeEntryItem> list(String department, String status, boolean includePending,
                                          String callerUsername, String category, String tag) {
-        StringBuilder where = new StringBuilder();
+        StringBuilder where = new StringBuilder("NOT EXISTS (SELECT 1 FROM document d "
+                + "WHERE d.source = knowledge_entry.source AND d.deleted_at IS NOT NULL) AND ");
         List<Object> params = new ArrayList<>();
         if (department == null) {
             where.append("visibility = ?");
@@ -243,6 +244,9 @@ public class KnowledgeEntryService {
     /** 条目详情（含正文）：管理员、本人、以及可见范围（all 或本部门）内的人可看，其余按不存在处理。 */
     public KnowledgeEntryDetail get(UUID id, UserPrincipal user) {
         EntryRow row = payloadHelper.requireEntry(id);
+        if (documentManageService.isDeleted(row.source())) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "知识条目不存在");
+        }
         boolean visibleToUser = user != null && (user.isAdmin() || user.username().equals(row.username())
                 || Visibility.ALL.equals(row.visibility())
                 || (user.department() != null && user.department().equals(row.visibility())));

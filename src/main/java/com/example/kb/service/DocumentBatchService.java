@@ -43,15 +43,48 @@ public class DocumentBatchService {
         return Map.of("source", source, "status", status, "chunks", chunks);
     }
 
-    /** 批量删除：逐条删块与关联条目行，返回成功/失败清单（非原子）。 */
+    /** 批量移入回收站：保留块与关联条目，返回成功/失败清单（非原子）。 */
     public Map<String, Object> delete(List<String> sources, UserPrincipal user) {
         List<String> deleted = new ArrayList<>();
         List<String> failed = new ArrayList<>();
         for (String source : sources) {
             try {
-                int chunks = documentManageService.deleteDocument(source).getDeletedChunks();
-                knowledgeEntryService.deleteBySource(source);
+                int chunks = documentManageService.deleteDocument(source, user.username()).getDeletedChunks();
                 auditService.record(user.username(), "DELETE_DOC", source, "deletedChunks=" + chunks);
+                deleted.add(source);
+            } catch (Exception e) {
+                failed.add(source + ": " + e.getMessage());
+            }
+        }
+        return Map.of("requested", sources.size(), "deleted", deleted, "failed", failed);
+    }
+
+    /** 批量恢复回收站文档：恢复删除前状态并同步知识条目状态。 */
+    public Map<String, Object> restore(List<String> sources, UserPrincipal user) {
+        List<String> restored = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+        for (String source : sources) {
+            try {
+                int versions = documentManageService.restoreDocument(source);
+                knowledgeEntryService.syncStatusBySource(source, documentManageService.currentStatus(source));
+                auditService.record(user.username(), "RESTORE_DOC", source, "restoredVersions=" + versions);
+                restored.add(source);
+            } catch (Exception e) {
+                failed.add(source + ": " + e.getMessage());
+            }
+        }
+        return Map.of("requested", sources.size(), "restored", restored, "failed", failed);
+    }
+
+    /** 批量永久删除回收站文档：清理原件、块、版本和关联条目。 */
+    public Map<String, Object> permanentlyDelete(List<String> sources, UserPrincipal user) {
+        List<String> deleted = new ArrayList<>();
+        List<String> failed = new ArrayList<>();
+        for (String source : sources) {
+            try {
+                int chunks = documentManageService.permanentlyDeleteDocument(source).getDeletedChunks();
+                knowledgeEntryService.deleteBySource(source);
+                auditService.record(user.username(), "PURGE_DOC", source, "deletedChunks=" + chunks);
                 deleted.add(source);
             } catch (Exception e) {
                 failed.add(source + ": " + e.getMessage());

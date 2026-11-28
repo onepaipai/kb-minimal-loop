@@ -4,7 +4,7 @@
 
 ## 前端页面
 
-浏览器打开 `http://localhost:8080/` 即可用：企业级外壳——登录页左品牌区右表单；登录后默认进总览仪表盘，统计（入库文档、知识块、注册用户、待审批文档、问答好评率）全部来自真实接口，另有快捷操作与最近入库文档；左侧深色边栏是导航（总览、智能问答、文档管理、审批、部门管理、审计日志、用户管理、改密码）与会话列表（新建、切换、删除对话，记录存服务端 /api/sessions，跨设备同步）；问答是中央对话气泡（默认流式逐字出，引用分数与原文显示在回答下方，回答下有好评/差评按钮），输入框上方有示例问题，Enter 发送、Shift+Enter 换行；上传文档走异步入库（提交后轮询任务状态，完成后刷新清单）、清单与删除、审批、部门管理、审计日志、用户管理、改密码、双因素开关在侧边栏切视图打开。Access Token 存浏览器 localStorage，8 小时有效；过期后前端先用 Refresh Token（7 天）自动换一对新 Token 再重试，换不到才回登录页。静态文件在 `src/main/resources/static/`（`index.html`、`styles.css`、`app.js`，无构建步骤）；样式用 Tabler v1.7.5（MIT，GitHub tabler/tabler 的 release 构建，`tabler.min.css` 直接放在 static/ 里本地引入，不依赖外网）；`/api/**` 之外的请求全部放行，所以页面不需要登录就能打开，调接口时才要 Token。
+浏览器打开 `http://localhost:8080/` 即可用：企业级外壳——登录页左品牌区右表单；登录后默认进总览仪表盘，统计（入库文档、知识块、注册用户、待审批文档、问答好评率）全部来自真实接口，另有快捷操作与最近入库文档；左侧深色边栏是导航（总览、智能问答、文档管理、知识条目、标准答案、通知、审批、知识盲区、部门管理、审计日志、用户管理、API 密钥、改密码、我的收藏）与会话列表（新建、切换、删除对话，记录存服务端 /api/sessions，跨设备同步）；问答是中央对话气泡（默认流式逐字出，引用分数与原文显示在回答下方，回答下有好评/差评按钮），输入框上方有示例问题，Enter 发送、Shift+Enter 换行；上传文档走异步入库（提交后轮询任务状态，完成后刷新清单）、清单与删除、审批、部门管理、审计日志、用户管理、改密码、双因素开关在侧边栏切视图打开。Access Token 存浏览器 localStorage，8 小时有效；过期后前端先用 Refresh Token（7 天）自动换一对新 Token 再重试，换不到才回登录页。静态文件在 `src/main/resources/static/`（`index.html`、`tabler.min.css`、`styles.css`、`theme.css`、`features.js`、`app.js`、`ui-enhance.js`，无构建步骤）；样式用 Tabler v1.7.5（MIT，GitHub tabler/tabler 的 release 构建，`tabler.min.css` 直接放在 static/ 里本地引入，不依赖外网）；`/api/**` 之外的请求全部放行，所以页面不需要登录就能打开，调接口时才要 Token。
 
 ## 鉴权（除登录外所有接口都要带 Token）
 
@@ -155,18 +155,52 @@ curl "http://localhost:8080/api/document/versions?source=报销制度.txt" -H "A
 
 权限与批准同规则。返回 `{"source":"报销制度.txt","versions":[1,2,3]}`（从小到大，含已 superseded 的旧版），回滚下拉框用。
 
-## DELETE /api/document?source=xxx —— 删除指定文档
+## DELETE /api/document?source=xxx —— 移入文档回收站
 
 ```bash
 curl -X DELETE "http://localhost:8080/api/document?source=报销制度.txt" -H "Authorization: Bearer $TOKEN"
 ```
 
-管理员可删全部，部门管理员只删本部门的；普通用户与编辑报 403。
+管理员可处理全部文档，部门管理员只处理本部门文档；普通用户与编辑报 403。操作只做软删除，文档块、版本、原件和关联知识条目都会保留；回收站文档不会出现在正常清单，也不会被问答检索。
 
-返回（`deletedChunks` 为实际删除的块数，按删除前后统计差值计算）：
+返回：
 
 ```json
 {"source":"报销制度.txt","deleted":true,"deletedChunks":1}
+```
+
+## GET /api/documents/trash —— 回收站清单
+
+```bash
+curl "http://localhost:8080/api/documents/trash?page=0&size=20" -H "Authorization: Bearer $TOKEN"
+```
+
+管理员可看全部，部门管理员只看全员可见和本部门文档；普通用户报 403。返回 `documents`、`total`、`page`、`size`，每项包含 `source`、`chunks`、`visibility`、删除前 `status`、`version`、`hasBlob`、`deletedAt` 和 `deletedBy`。
+
+## POST /api/document/restore —— 恢复回收站文档
+
+```bash
+curl -X POST "http://localhost:8080/api/document/restore?source=报销制度.txt" -H "Authorization: Bearer $TOKEN"
+```
+
+恢复删除前的审批状态；管理员可恢复全部，部门管理员只能恢复本部门文档。返回 `{"source":"报销制度.txt","restoredVersions":1}`。恢复后文档重新出现在清单，只有原状态为 `approved` 时重新参与问答。
+
+## DELETE /api/document/permanent —— 永久删除回收站文档
+
+```bash
+curl -X DELETE "http://localhost:8080/api/document/permanent?source=报销制度.txt" -H "Authorization: Bearer $TOKEN"
+```
+
+仅管理员可用。永久删除会清理文档块、所有版本、原件和关联知识条目，无法恢复。返回格式与移入回收站相同。
+
+## POST /api/document/batch-restore /api/document/batch-permanent-delete —— 批量回收站操作
+
+请求体统一为 `{"sources":["a.txt","b.pdf"]}`，一次支持 1-50 篇。批量恢复沿用文档删除权限；批量永久删除仅管理员可用。任一文档越权或不存在时先整体拒绝，不会执行任何一条。
+
+```bash
+curl -X POST http://localhost:8080/api/document/batch-restore \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"sources":["报销制度.txt"]}'
 ```
 
 ## POST /api/auth/login —— 登录

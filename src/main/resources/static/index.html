@@ -67,6 +67,7 @@
       <button type="button" class="sidebar-link active" data-view="dashboard"><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg>总览</button>
       <button type="button" class="sidebar-link" data-view="chat"><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 3h12v8H6l-4 3z"/></svg>智能问答</button>
       <button type="button" class="sidebar-link" data-view="manage"><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 2h7l3 3v9H3z"/><path d="M10 2v3h3"/></svg>文档管理</button>
+      <button type="button" class="sidebar-link" data-view="trash" id="trashNavBtn" hidden><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h10M6 5V3h4v2M5 7v5M8 7v5M11 7v5"/><path d="M4 5l.7 9h6.6L12 5"/></svg>回收站</button>
       <button type="button" class="sidebar-link" data-view="entries" id="entriesNavBtn" hidden><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 2h10v12H3z"/><path d="M6 6h4M6 9h4"/></svg>知识条目</button>
       <button type="button" class="sidebar-link" data-view="faq" id="faqNavBtn" hidden><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="8" cy="8" r="6"/><path d="M6.5 6a1.5 1.5 0 1 1 2 1.4c-.6.3-1 .7-1 1.6"/><path d="M8 11h.01"/></svg>标准答案</button>
       <button type="button" class="sidebar-link" data-view="notifications"><svg class="kb-icon" viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6a4 4 0 0 1 8 0v4l1 2H3l1-2z"/><path d="M6.5 14h3"/></svg>通知 <span id="notifBadge" class="badge bg-red" hidden></span></button>
@@ -254,6 +255,33 @@
             <div class="table-responsive">
               <table id="docsTable" class="table table-vcenter">
                 <thead><tr><th></th><th>文件</th><th>块数</th><th>可见性</th><th>状态</th><th>版本</th><th>操作</th></tr></thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="trashView" class="page-view" hidden>
+      <div class="manage-inner">
+        <div class="card">
+          <div class="card-header">
+            <h2 class="card-title">文档回收站</h2>
+          </div>
+          <div class="card-body">
+            <p class="text-secondary small">移入回收站的文档不会参与问答和正常清单。恢复会保留删除前状态，永久删除不可恢复。</p>
+            <div class="d-flex align-items-center gap-2 mb-3">
+              <button id="refreshTrashBtn" type="button" class="btn btn-outline-secondary btn-sm">刷新</button>
+              <button id="batchRestoreTrashBtn" type="button" class="btn btn-primary btn-sm">批量恢复</button>
+              <button id="batchPurgeTrashBtn" type="button" class="btn btn-outline-danger btn-sm" hidden>批量永久删除</button>
+              <button id="prevTrashBtn" type="button" class="btn btn-outline-secondary btn-sm">上一页</button>
+              <button id="nextTrashBtn" type="button" class="btn btn-outline-secondary btn-sm">下一页</button>
+              <span id="trashPageInfo" class="text-secondary"></span>
+            </div>
+            <div class="table-responsive">
+              <table id="trashTable" class="table table-vcenter">
+                <thead><tr><th></th><th>文件</th><th>块数</th><th>可见性</th><th>原状态</th><th>版本</th><th>删除时间</th><th>删除人</th><th>操作</th></tr></thead>
                 <tbody></tbody>
               </table>
             </div>

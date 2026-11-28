@@ -65,8 +65,10 @@ public class ExportService {
             List<List<String>> out = new ArrayList<>();
             out.add(List.of("source", "chunks", "visibility", "status", "version"));
             jdbcTemplate.query(
-                    "SELECT source, chunk_count, visibility, status, version FROM document_version "
-                            + "WHERE lifecycle_state = 'CURRENT' ORDER BY source LIMIT " + MAX_ROWS,
+                    "SELECT dv.source, dv.chunk_count, dv.visibility, dv.status, dv.version FROM document_version dv "
+                            + "JOIN document d ON d.source = dv.source "
+                            + "WHERE dv.lifecycle_state = 'CURRENT' AND d.deleted_at IS NULL "
+                            + "ORDER BY dv.source LIMIT " + MAX_ROWS,
                     (rs, rowNum) -> List.of(rs.getString(1), String.valueOf(rs.getInt(2)),
                             rs.getString(3), rs.getString(4), String.valueOf(rs.getInt(5))))
                     .forEach(out::add);

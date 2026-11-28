@@ -1,10 +1,13 @@
 package com.example.kb.service;
 
+import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
 import com.example.kb.common.Visibility;
 import com.example.kb.dto.DeleteDocumentResponse;
+import com.example.kb.dto.DocumentTrashListResponse;
+import com.example.kb.dto.DocumentTrashSummary;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import dev.langchain4j.store.embedding.filter.MetadataFilterBuilder;
@@ -234,16 +237,129 @@ final class DocumentVersionQueryHelper {
         return count == null ? 0 : count.intValue();
     }
 
-    DeleteDocumentResponse deleteDocument(String source) {
+    @Transactional
+    DeleteDocumentResponse softDeleteDocument(String source, String username) {
+        int before = countAllBySource(source);
+        int updated = jdbcTemplate.update("UPDATE document SET deleted_at = now(), deleted_by = ?, updated_at = now() "
+                        + "WHERE source = ? AND deleted_at IS NULL", username, source);
+        if (updated == 0) {
+            if (isDeleted(source)) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "文档已在回收站");
+            }
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "文档不存在");
+        }
+        jdbcTemplate.update("UPDATE document_version SET deleted_prev_status = status, status = ?, updated_at = now() "
+                        + "WHERE source = ? AND lifecycle_state IN ('CURRENT','PENDING','PROCESSING') "
+                        + "AND deleted_prev_status IS NULL", MetadataKeys.DELETED_STATUS, source);
+        int marked = jdbcTemplate.update("UPDATE " + TABLE + " c SET metadata = jsonb_set(COALESCE(c.metadata, '{}'::jsonb), "
+                        + "'{status}', to_jsonb(?::text)) WHERE c.metadata->>'source' = ? "
+                        + "AND CAST(NULLIF(c.metadata->>'version','') AS INTEGER) IN ("
+                        + "SELECT version FROM document_version WHERE source = ? AND deleted_prev_status IS NOT NULL)",
+                MetadataKeys.DELETED_STATUS, source, source);
+        if (marked == 0 && before > 0) {
+            jdbcTemplate.update("UPDATE " + TABLE + " SET metadata = jsonb_set(COALESCE(metadata, '{}'::jsonb), "
+                            + "'{status}', to_jsonb(?::text)) WHERE metadata->>'source' = ?",
+                    MetadataKeys.DELETED_STATUS, source);
+        }
+        DeleteDocumentResponse response = new DeleteDocumentResponse();
+        response.setSource(source);
+        response.setDeletedChunks(before);
+        response.setDeleted(before > 0);
+        return response;
+    }
+
+    boolean isDeleted(String source) {
+        Integer count = jdbcTemplate.queryForObject(
+                "SELECT count(*) FROM document WHERE source = ? AND deleted_at IS NOT NULL", Integer.class, source);
+        return count != null && count > 0;
+    }
+
+    String getTrashVisibility(String source) {
+        List<String> rows = jdbcTemplate.query("SELECT dv.visibility FROM document d "
+                        + "JOIN document_version dv ON dv.source = d.source "
+                        + "WHERE d.source = ? AND d.deleted_at IS NOT NULL AND dv.lifecycle_state <> 'FAILED' "
+                        + "ORDER BY CASE WHEN dv.lifecycle_state IN ('CURRENT','PENDING','PROCESSING') THEN 0 ELSE 1 END, "
+                        + "dv.version DESC LIMIT 1", (rs, rowNum) -> rs.getString(1), source);
+        return rows.isEmpty() ? null : rows.get(0);
+    }
+
+    DocumentTrashListResponse listTrash(String department, int page, int size) {
+        StringBuilder selection = new StringBuilder("SELECT DISTINCT ON (d.source) d.source, dv.visibility, "
+                + "COALESCE(dv.deleted_prev_status, 'deleted') AS status, dv.version, dv.chunk_count, "
+                + "d.deleted_at, d.deleted_by, EXISTS (SELECT 1 FROM document_blob b "
+                + "WHERE b.source = d.source AND b.version = dv.version) AS has_blob "
+                + "FROM document d JOIN document_version dv ON dv.source = d.source "
+                + "WHERE d.deleted_at IS NOT NULL AND dv.lifecycle_state <> 'FAILED'");
+        List<Object> params = new ArrayList<>();
+        if (department == null) {
+            selection.append(" AND dv.visibility = ?");
+            params.add(Visibility.ALL);
+        } else {
+            selection.append(" AND dv.visibility IN (?, ?)");
+            params.add(Visibility.ALL);
+            params.add(department);
+        }
+        selection.append(" ORDER BY d.source, CASE WHEN dv.lifecycle_state IN ('CURRENT','PENDING','PROCESSING') "
+                + "THEN 0 ELSE 1 END, dv.version DESC");
+        Integer total = jdbcTemplate.queryForObject("SELECT count(*) FROM (" + selection + ") selected",
+                Integer.class, params.toArray());
+        List<Object> pageParams = new ArrayList<>(params);
+        pageParams.add(size);
+        pageParams.add(page * size);
+        List<DocumentTrashSummary> documents = jdbcTemplate.query(
+                "SELECT source, visibility, status, version, chunk_count, has_blob, deleted_at, deleted_by FROM ("
+                        + selection + ") selected LIMIT ? OFFSET ?",
+                (rs, rowNum) -> {
+                    DocumentTrashSummary summary = new DocumentTrashSummary();
+                    summary.setSource(rs.getString("source"));
+                    summary.setVisibility(rs.getString("visibility"));
+                    summary.setStatus(rs.getString("status"));
+                    summary.setVersion(rs.getInt("version"));
+                    summary.setChunks(rs.getInt("chunk_count"));
+                    summary.setHasBlob(rs.getBoolean("has_blob"));
+                    summary.setDeletedAt(rs.getObject("deleted_at", OffsetDateTime.class));
+                    summary.setDeletedBy(rs.getString("deleted_by"));
+                    return summary;
+                }, pageParams.toArray());
+        DocumentTrashListResponse response = new DocumentTrashListResponse();
+        response.setDocuments(documents);
+        response.setTotal(total == null ? 0 : total);
+        response.setPage(page);
+        response.setSize(size);
+        return response;
+    }
+
+    @Transactional
+    int restoreDocument(String source) {
+        if (!isDeleted(source)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "回收站中不存在该文档");
+        }
+        jdbcTemplate.update("UPDATE " + TABLE + " c SET metadata = jsonb_set(COALESCE(c.metadata, '{}'::jsonb), "
+                        + "'{status}', to_jsonb(dv.deleted_prev_status)) FROM document_version dv "
+                        + "WHERE dv.source = ? AND dv.deleted_prev_status IS NOT NULL "
+                        + "AND c.metadata->>'source' = dv.source "
+                        + "AND CAST(NULLIF(c.metadata->>'version','') AS INTEGER) = dv.version", source);
+        int restored = jdbcTemplate.update("UPDATE document_version SET status = deleted_prev_status, "
+                        + "deleted_prev_status = NULL, updated_at = now() WHERE source = ? "
+                        + "AND deleted_prev_status IS NOT NULL", source);
+        jdbcTemplate.update("UPDATE document SET deleted_at = NULL, deleted_by = NULL, updated_at = now() "
+                        + "WHERE source = ?", source);
+        return restored;
+    }
+
+    @Transactional
+    DeleteDocumentResponse permanentlyDeleteDocument(String source) {
+        if (!isDeleted(source)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "回收站中不存在该文档");
+        }
         int before = countAllBySource(source);
         removeBySource(source);
         jdbcTemplate.update("DELETE FROM document_version WHERE source = ?", source);
         jdbcTemplate.update("DELETE FROM document WHERE source = ?", source);
-        int deletedChunks = before - countAllBySource(source);
         DeleteDocumentResponse response = new DeleteDocumentResponse();
         response.setSource(source);
-        response.setDeletedChunks(deletedChunks);
-        response.setDeleted(deletedChunks > 0);
+        response.setDeletedChunks(before);
+        response.setDeleted(before > 0);
         return response;
     }
 
@@ -377,9 +493,10 @@ final class DocumentVersionQueryHelper {
 
     int purgeOldSuperseded(int keep) {
         List<VersionRef> targets = jdbcTemplate.query(
-                "SELECT source, version FROM (SELECT source, version, row_number() OVER "
-                        + "(PARTITION BY source ORDER BY version DESC) AS rn FROM document_version "
-                        + "WHERE lifecycle_state = 'SUPERSEDED') ranked WHERE rn > ?",
+                "SELECT source, version FROM (SELECT dv.source, dv.version, row_number() OVER "
+                        + "(PARTITION BY dv.source ORDER BY dv.version DESC) AS rn FROM document_version dv "
+                        + "JOIN document d ON d.source = dv.source "
+                        + "WHERE dv.lifecycle_state = 'SUPERSEDED' AND d.deleted_at IS NULL) ranked WHERE rn > ?",
                 (rs, rowNum) -> new VersionRef(rs.getString("source"), rs.getInt("version")), keep);
         if (targets.isEmpty() && !relationRowsExist("")) {
             return jdbcTemplate.update("DELETE FROM " + TABLE + " c WHERE COALESCE(c.metadata->>'status','approved') = 'superseded' "

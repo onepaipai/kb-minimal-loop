@@ -144,12 +144,12 @@ async function batchDeleteDocuments() {
         showMessage('请先勾选要删除的文档');
         return;
     }
-    if (!window.confirm('确定删除勾选的 ' + sources.length + ' 篇文档吗？')) {
+    if (!window.confirm('确定将勾选的 ' + sources.length + ' 篇文档移入回收站吗？')) {
         return;
     }
     try {
         const result = await api('/api/document/batch-delete', { method: 'POST', body: { sources } });
-        let message = '已删除 ' + result.deleted.length + ' 篇';
+        let message = '已移入回收站 ' + result.deleted.length + ' 篇';
         if (result.failed.length > 0) {
             message += '，失败 ' + result.failed.length + ' 篇：' + result.failed.join('；');
         }
@@ -158,6 +158,132 @@ async function batchDeleteDocuments() {
     } catch (e) {
         showMessage(e.message);
     }
+}
+
+/** 加载回收站：服务端已按当前用户部门范围过滤。 */
+async function loadTrash(page) {
+    trashPage = page;
+    try {
+        const data = await api('/api/documents/trash?page=' + page + '&size=' + DOCS_PAGE_SIZE);
+        const tbody = $('trashTable').querySelector('tbody');
+        tbody.textContent = '';
+        (data.documents || []).forEach((doc) => {
+            const row = document.createElement('tr');
+            const select = document.createElement('td');
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.className = 'trash-checkbox';
+            checkbox.dataset.source = doc.source;
+            select.appendChild(checkbox);
+            const source = document.createElement('td');
+            source.textContent = doc.source;
+            const chunks = document.createElement('td');
+            chunks.textContent = doc.chunks;
+            const visibility = document.createElement('td');
+            visibility.textContent = doc.visibility;
+            const status = document.createElement('td');
+            status.textContent = doc.status === 'approved' ? '已发布' : doc.status === 'pending' ? '待审批' : '已驳回';
+            const version = document.createElement('td');
+            version.textContent = 'v' + doc.version;
+            const deletedAt = document.createElement('td');
+            deletedAt.textContent = doc.deletedAt ? new Date(doc.deletedAt).toLocaleString() : '—';
+            const deletedBy = document.createElement('td');
+            deletedBy.textContent = doc.deletedBy || '—';
+            const action = document.createElement('td');
+            const restore = document.createElement('button');
+            restore.type = 'button';
+            restore.className = 'btn btn-outline-primary btn-sm';
+            restore.textContent = '恢复';
+            restore.addEventListener('click', () => restoreTrash(doc.source));
+            action.appendChild(restore);
+            if (currentUser && currentUser.role === 'ADMIN') {
+                const purge = document.createElement('button');
+                purge.type = 'button';
+                purge.className = 'btn btn-outline-danger btn-sm ms-1';
+                purge.textContent = '永久删除';
+                purge.addEventListener('click', () => purgeTrash(doc.source));
+                action.appendChild(purge);
+            }
+            row.append(select, source, chunks, visibility, status, version, deletedAt, deletedBy, action);
+            tbody.appendChild(row);
+        });
+        const totalPages = Math.max(1, Math.ceil(data.total / DOCS_PAGE_SIZE));
+        $('trashPageInfo').textContent = '第 ' + (page + 1) + ' / ' + totalPages + ' 页，共 ' + data.total + ' 篇';
+        $('prevTrashBtn').disabled = page <= 0;
+        $('nextTrashBtn').disabled = (page + 1) * DOCS_PAGE_SIZE >= data.total;
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+async function restoreTrash(source) {
+    if (!window.confirm('确定恢复「' + source + '」吗？')) {
+        return;
+    }
+    try {
+        await api('/api/document/restore?source=' + encodeURIComponent(source), { method: 'POST' });
+        showMessage('已恢复「' + source + '」');
+        loadTrash(trashPage);
+        loadDocuments(0);
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+async function purgeTrash(source) {
+    if (!window.confirm('永久删除后无法恢复，确定删除「' + source + '」吗？')) {
+        return;
+    }
+    try {
+        await api('/api/document/permanent?source=' + encodeURIComponent(source), { method: 'DELETE' });
+        showMessage('已永久删除「' + source + '」');
+        loadTrash(trashPage);
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+async function batchRestoreTrash() {
+    const sources = selectedTrashSources();
+    if (sources.length === 0) {
+        showMessage('请先勾选要恢复的文档');
+        return;
+    }
+    if (!window.confirm('确定恢复勾选的 ' + sources.length + ' 篇文档吗？')) {
+        return;
+    }
+    await runTrashBatch('/api/document/batch-restore', sources, '恢复', 'restored');
+}
+
+async function batchPurgeTrash() {
+    const sources = selectedTrashSources();
+    if (sources.length === 0) {
+        showMessage('请先勾选要永久删除的文档');
+        return;
+    }
+    if (!window.confirm('永久删除后无法恢复，确定删除勾选的 ' + sources.length + ' 篇文档吗？')) {
+        return;
+    }
+    await runTrashBatch('/api/document/batch-permanent-delete', sources, '永久删除', 'deleted');
+}
+
+async function runTrashBatch(path, sources, action, resultKey) {
+    try {
+        const result = await api(path, { method: 'POST', body: { sources } });
+        let message = '已' + action + ' ' + result[resultKey].length + ' 篇';
+        if (result.failed.length > 0) {
+            message += '，失败 ' + result.failed.length + ' 篇：' + result.failed.join('；');
+        }
+        showMessage(message);
+        loadTrash(trashPage);
+        loadDocuments(0);
+    } catch (e) {
+        showMessage(e.message);
+    }
+}
+
+function selectedTrashSources() {
+    return Array.from(document.querySelectorAll('.trash-checkbox:checked')).map((box) => box.dataset.source);
 }
 
 /** 批量删除通用流程：勾选校验、确认、提交、结果提示与刷新。 */

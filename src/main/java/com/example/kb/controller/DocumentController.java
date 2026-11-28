@@ -6,6 +6,7 @@ import java.util.Set;
 import com.example.kb.common.Visibility;
 import com.example.kb.dto.DeleteDocumentResponse;
 import com.example.kb.dto.DocumentListResponse;
+import com.example.kb.dto.DocumentTrashListResponse;
 import com.example.kb.service.AuditService;
 import com.example.kb.security.DepartmentScope;
 import com.example.kb.security.UserPrincipal;
@@ -71,15 +72,57 @@ public class DocumentController {
         return documentManageService.listDocuments(effectiveDepartment, page, size, status, includePending);
     }
 
-    /** 删除指定文档的全部块：管理员可删全部，部门管理员只删本部门的；条目来源的连条目行一起删。 */
+    /** 将指定文档移入回收站：管理员可删全部，部门管理员只删本部门的；关联条目保留待恢复。 */
     @DeleteMapping("/document")
     public DeleteDocumentResponse deleteDocument(@RequestParam("source") String source) {
         UserPrincipal user = DepartmentScope.requireCurrentUser();
         String visibility = requireDocumentVisibility(source);
         DepartmentScope.requireCanDeleteDocument(user, visibility);
-        DeleteDocumentResponse response = documentManageService.deleteDocument(source);
-        knowledgeEntryService.deleteBySource(source);
+        DeleteDocumentResponse response = documentManageService.deleteDocument(source, user.username());
         auditService.record(user.username(), "DELETE_DOC", source, "deletedChunks=" + response.getDeletedChunks());
+        return response;
+    }
+
+    /** 回收站文档清单：只对管理员和部门管理员开放，沿用文档可见性范围。 */
+    @GetMapping("/documents/trash")
+    public DocumentTrashListResponse trash(@RequestParam(value = "department", required = false) String department,
+                                           @RequestParam(value = "page", defaultValue = "0") int page,
+                                           @RequestParam(value = "size", defaultValue = "20") int size) {
+        if (page < 0 || size < 1 || size > 100) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "page 从 0 起，size 仅允许 1-100");
+        }
+        UserPrincipal user = DepartmentScope.requireCurrentUser();
+        if (!user.isAdmin() && !user.isDeptAdmin()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "没有权限查看回收站");
+        }
+        String requested = department == null ? null : Visibility.normalize(department);
+        String effectiveDepartment = DepartmentScope.effectiveDepartment(user, requested);
+        return documentManageService.listTrash(effectiveDepartment, page, size);
+    }
+
+    /** 恢复回收站文档：恢复删除前的审批状态和可检索状态。 */
+    @PostMapping("/document/restore")
+    public Map<String, Object> restore(@RequestParam("source") String source) {
+        UserPrincipal user = DepartmentScope.requireCurrentUser();
+        String visibility = requireTrashVisibility(source);
+        DepartmentScope.requireCanDeleteDocument(user, visibility);
+        int restored = documentManageService.restoreDocument(source);
+        knowledgeEntryService.syncStatusBySource(source, documentManageService.currentStatus(source));
+        auditService.record(user.username(), "RESTORE_DOC", source, "restoredVersions=" + restored);
+        return Map.of("source", source, "restoredVersions", restored);
+    }
+
+    /** 永久删除回收站文档：仅管理员可执行，删除块、版本、原件和关联条目。 */
+    @DeleteMapping("/document/permanent")
+    public DeleteDocumentResponse permanentDelete(@RequestParam("source") String source) {
+        UserPrincipal user = DepartmentScope.requireCurrentUser();
+        if (!user.isAdmin()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只有管理员可以永久删除文档");
+        }
+        requireTrashVisibility(source);
+        DeleteDocumentResponse response = documentManageService.permanentlyDeleteDocument(source);
+        knowledgeEntryService.deleteBySource(source);
+        auditService.record(user.username(), "PURGE_DOC", source, "deletedChunks=" + response.getDeletedChunks());
         return response;
     }
 
@@ -186,6 +229,14 @@ public class DocumentController {
         String visibility = documentManageService.getVisibility(source);
         if (visibility == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "文档不存在");
+        }
+        return visibility;
+    }
+
+    private String requireTrashVisibility(String source) {
+        String visibility = documentManageService.getTrashVisibility(source);
+        if (visibility == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "回收站中不存在该文档");
         }
         return visibility;
     }

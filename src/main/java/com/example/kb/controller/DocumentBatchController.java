@@ -44,6 +44,31 @@ public class DocumentBatchController {
         return documentBatchService.delete(sources, user);
     }
 
+    /** 批量恢复回收站文档：任一越权或不存在整体拒绝，再逐条恢复。 */
+    @PostMapping("/document/batch-restore")
+    public Map<String, Object> batchRestore(@RequestBody DocumentBatchDeleteRequest request) {
+        UserPrincipal user = DepartmentScope.requireCurrentUser();
+        List<String> sources = requireSources(request == null ? null : request.getSources());
+        for (String source : sources) {
+            DepartmentScope.requireCanDeleteDocument(user, requireTrashVisibility(source));
+        }
+        return documentBatchService.restore(sources, user);
+    }
+
+    /** 批量永久删除回收站文档：仅管理员可执行。 */
+    @PostMapping("/document/batch-permanent-delete")
+    public Map<String, Object> batchPermanentDelete(@RequestBody DocumentBatchDeleteRequest request) {
+        UserPrincipal user = DepartmentScope.requireCurrentUser();
+        if (!user.isAdmin()) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN, "只有管理员可以永久删除文档");
+        }
+        List<String> sources = requireSources(request == null ? null : request.getSources());
+        for (String source : sources) {
+            requireTrashVisibility(source);
+        }
+        return documentBatchService.permanentlyDelete(sources, user);
+    }
+
     /** 批量审批：status 只允许 approved/rejected，可带驳回理由。 */
     @PostMapping("/document/batch-review")
     public Map<String, Object> batchReview(@RequestBody DocumentBatchReviewRequest request) {
@@ -105,6 +130,14 @@ public class DocumentBatchController {
         String visibility = documentManageService.getCandidateVisibility(source);
         if (visibility == null) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "待审批文档不存在");
+        }
+        return visibility;
+    }
+
+    private String requireTrashVisibility(String source) {
+        String visibility = documentManageService.getTrashVisibility(source);
+        if (visibility == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "回收站中不存在该文档");
         }
         return visibility;
     }

@@ -7,7 +7,7 @@ spring:
       max-file-size: 20MB
       max-request-size: 30MB
   datasource:
-    # Neon Postgres 直连地址（非 -pooler 端点），5 个敏感值全部走环境变量，不写死
+    # Neon Postgres 直连地址（非 -pooler 端点），数据库与模型配置全部走环境变量，不写死
     url: ${DB_URL}
     username: ${DB_USER}
     password: ${DB_PASSWORD}

@@ -13,6 +13,7 @@ const messageEl = $('message');
 
 let currentUser = null;
 let docsPage = 0;
+let trashPage = 0;
 let auditPage = 0;
 let notifPage = 0;
 let asking = false;
@@ -163,6 +164,8 @@ function showApp() {
         deptBadge.hidden = true;
     }
     $('adminNavBtn').hidden = !(currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN');
+    $('trashNavBtn').hidden = !(currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN');
+    $('batchPurgeTrashBtn').hidden = currentUser.role !== 'ADMIN';
     $('approvalNavBtn').hidden = !(currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN');
     $('entriesNavBtn').hidden = currentUser.role === 'USER';
     $('faqNavBtn').hidden = !(currentUser.role === 'ADMIN' || currentUser.role === 'DEPT_ADMIN');
@@ -735,7 +738,7 @@ async function askStream(request, bubble, signal) {
 
 /* ---------------- 视图切换 ---------------- */
 
-const VIEW_TITLES = { dashboard: '总览', chat: '智能问答', manage: '文档管理', entries: '知识条目',
+const VIEW_TITLES = { dashboard: '总览', chat: '智能问答', manage: '文档管理', trash: '回收站', entries: '知识条目',
     faq: '标准答案', notifications: '通知', approval: '审批', miss: '知识盲区', departments: '部门管理',
     audit: '审计日志', admin: '用户管理', apikeys: 'API 密钥', password: '改密码', starred: '我的收藏' };
 
@@ -743,6 +746,7 @@ function showView(name) {
     $('dashboardView').hidden = name !== 'dashboard';
     $('chatView').hidden = name !== 'chat';
     $('manageView').hidden = name !== 'manage';
+    $('trashView').hidden = name !== 'trash';
     $('entriesView').hidden = name !== 'entries';
     $('faqView').hidden = name !== 'faq';
     $('notificationsView').hidden = name !== 'notifications';
@@ -763,6 +767,8 @@ function showView(name) {
         loadDashboard();
     } else if (name === 'notifications') {
         loadNotifications(notifPage);
+    } else if (name === 'trash') {
+        loadTrash(trashPage);
     } else if (name === 'approval') {
         loadPending();
     } else if (name === 'entries') {
@@ -867,13 +873,16 @@ async function loadDocuments(page) {
 
 
 async function deleteDocument(source) {
-    if (!window.confirm('确定删除「' + source + '」吗？')) {
+    if (!window.confirm('确定将「' + source + '」移入回收站吗？')) {
         return;
     }
     try {
         const result = await api('/api/document?source=' + encodeURIComponent(source), { method: 'DELETE' });
-        showMessage('已删除「' + source + '」，共 ' + result.deletedChunks + ' 块');
+        showMessage('已移入回收站「' + source + '」，共 ' + result.deletedChunks + ' 块');
         loadDocuments(docsPage);
+        if (!$('trashView').hidden) {
+            loadTrash(trashPage);
+        }
     } catch (e) {
         showMessage(e.message);
     }
@@ -1724,6 +1733,9 @@ async function pollIngestJob(jobId) {
 
 $('refreshDocsBtn').addEventListener('click', () => loadDocuments(docsPage));
 $('batchDeleteDocsBtn').addEventListener('click', () => batchDeleteDocuments());
+$('refreshTrashBtn').addEventListener('click', () => loadTrash(trashPage));
+$('batchRestoreTrashBtn').addEventListener('click', () => batchRestoreTrash());
+$('batchPurgeTrashBtn').addEventListener('click', () => batchPurgeTrash());
 $('batchDeleteFaqBtn').addEventListener('click', () =>
     runBatchDelete('/api/faq/batch-delete', selectedIds('faq-checkbox'), '标准答案', () => loadFaqs()));
 $('batchDeleteEntriesBtn').addEventListener('click', () =>
@@ -1732,6 +1744,8 @@ $('batchDeleteSessionsBtn').addEventListener('click', () =>
     runBatchDelete('/api/sessions/batch-delete', selectedIds('session-checkbox'), '会话', () => refreshSessionList()));
 $('prevPageBtn').addEventListener('click', () => loadDocuments(Math.max(0, docsPage - 1)));
 $('nextPageBtn').addEventListener('click', () => loadDocuments(docsPage + 1));
+$('prevTrashBtn').addEventListener('click', () => loadTrash(Math.max(0, trashPage - 1)));
+$('nextTrashBtn').addEventListener('click', () => loadTrash(trashPage + 1));
 $('refreshNotifBtn').addEventListener('click', () => loadNotifications(notifPage));
 $('readAllNotifBtn').addEventListener('click', async () => {
     try {

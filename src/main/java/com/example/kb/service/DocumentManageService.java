@@ -7,6 +7,7 @@ import com.example.kb.common.Visibility;
 import com.example.kb.dto.DeleteDocumentResponse;
 import com.example.kb.dto.DocumentListResponse;
 import com.example.kb.dto.DocumentSummary;
+import com.example.kb.dto.DocumentTrashListResponse;
 import dev.langchain4j.data.segment.TextSegment;
 import dev.langchain4j.store.embedding.EmbeddingStore;
 import org.springframework.http.HttpStatus;
@@ -48,7 +49,8 @@ public class DocumentManageService {
         StringBuilder selection = new StringBuilder("SELECT DISTINCT ON (dv.source) dv.source, dv.visibility, "
                 + "dv.status, dv.version, dv.chunk_count, "
                 + "EXISTS (SELECT 1 FROM document_blob b WHERE b.source = dv.source AND b.version = dv.version) AS has_blob "
-                + "FROM document_version dv WHERE ").append(visibility);
+                + "FROM document_version dv JOIN document d ON d.source = dv.source "
+                + "WHERE d.deleted_at IS NULL AND ").append(visibility);
         List<Object> params = new ArrayList<>(visibilityParams);
         selection.append(" AND dv.lifecycle_state <> 'FAILED'");
         if (status != null && !status.isBlank()) {
@@ -88,18 +90,30 @@ public class DocumentManageService {
     }
 
     public String getVisibility(String source) {
+        if (documentVersionQueryHelper.isDeleted(source)) {
+            return null;
+        }
         return documentVersionQueryHelper.getVisibility(source);
     }
 
     public String getCandidateVisibility(String source) {
+        if (documentVersionQueryHelper.isDeleted(source)) {
+            return null;
+        }
         return documentVersionQueryHelper.getCandidateVisibility(source);
     }
 
     public String getVersionVisibility(String source, int version) {
+        if (documentVersionQueryHelper.isDeleted(source)) {
+            return null;
+        }
         return documentVersionQueryHelper.getVersionVisibility(source, version);
     }
 
     public String getVersionStatus(String source, int version) {
+        if (documentVersionQueryHelper.isDeleted(source)) {
+            return null;
+        }
         return documentVersionQueryHelper.getVersionStatus(source, version);
     }
 
@@ -129,6 +143,9 @@ public class DocumentManageService {
 
     public int reserveVersion(String source, String batch, String fileHash, String visibility,
                               String status, String username) {
+        if (documentVersionQueryHelper.isDeleted(source)) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "文档在回收站，请先恢复或永久删除");
+        }
         return documentVersionQueryHelper.reserveVersion(source, batch, fileHash, visibility, status, username);
     }
 
@@ -162,8 +179,31 @@ public class DocumentManageService {
         return documentVersionQueryHelper.countBySource(source);
     }
 
-    public DeleteDocumentResponse deleteDocument(String source) {
-        DeleteDocumentResponse response = documentVersionQueryHelper.deleteDocument(source);
+    @Transactional
+    public DeleteDocumentResponse deleteDocument(String source, String username) {
+        return documentVersionQueryHelper.softDeleteDocument(source, username);
+    }
+
+    public DocumentTrashListResponse listTrash(String department, int page, int size) {
+        return documentVersionQueryHelper.listTrash(department, page, size);
+    }
+
+    public boolean isDeleted(String source) {
+        return documentVersionQueryHelper.isDeleted(source);
+    }
+
+    public String getTrashVisibility(String source) {
+        return documentVersionQueryHelper.getTrashVisibility(source);
+    }
+
+    @Transactional
+    public int restoreDocument(String source) {
+        return documentVersionQueryHelper.restoreDocument(source);
+    }
+
+    @Transactional
+    public DeleteDocumentResponse permanentlyDeleteDocument(String source) {
+        DeleteDocumentResponse response = documentVersionQueryHelper.permanentlyDeleteDocument(source);
         if (response.isDeleted()) {
             documentBlobService.deleteBySource(source);
         }

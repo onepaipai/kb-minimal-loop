@@ -89,8 +89,9 @@ public class DocumentBlobService {
     /** 清理旧版原件：只清理版本事实表中明确标记为旧版且超出保留数的原件。 */
     public void purgeOld(int keep) {
         jdbcTemplate.update("DELETE FROM document_blob b WHERE (b.source, b.version) IN ("
-                + "SELECT source, version FROM (SELECT source, version, row_number() OVER "
-                + "(PARTITION BY source ORDER BY version DESC) AS rn FROM document_version "
-                + "WHERE lifecycle_state = 'SUPERSEDED') ranked WHERE rn > ?)", keep);
+                + "SELECT source, version FROM (SELECT dv.source, dv.version, row_number() OVER "
+                + "(PARTITION BY dv.source ORDER BY dv.version DESC) AS rn FROM document_version dv "
+                + "JOIN document d ON d.source = dv.source "
+                + "WHERE dv.lifecycle_state = 'SUPERSEDED' AND d.deleted_at IS NULL) ranked WHERE rn > ?)", keep);
     }
 }

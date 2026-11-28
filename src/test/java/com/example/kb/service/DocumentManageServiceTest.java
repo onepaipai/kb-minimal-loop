@@ -109,4 +109,34 @@ class DocumentManageServiceTest {
         assertTrue(sql.getValue().contains("'superseded'"));
         assertTrue(sql.getValue().contains("max(CAST(NULLIF(metadata->>'version'"));
     }
+
+    @Test
+    void deleteDocumentMovesSourceToTrashAndKeepsData() {
+        when(jdbcTemplate.queryForObject(anyString(), eq(Long.class), any(Object[].class))).thenReturn(2L);
+        when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(1);
+
+        var response = service().deleteDocument("a.txt", "admin");
+
+        assertTrue(response.isDeleted());
+        assertEquals(2, response.getDeletedChunks());
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate, atLeast(2)).update(sql.capture(), any(Object[].class));
+        assertTrue(sql.getAllValues().stream().anyMatch(value -> value.contains("deleted_at")));
+        assertTrue(sql.getAllValues().stream().anyMatch(value -> value.contains("deleted_prev_status")));
+        assertTrue(sql.getAllValues().stream().anyMatch(value -> value.contains("to_jsonb(?::text)")));
+    }
+
+    @Test
+    void restoreDocumentRestoresPreviousStatus() {
+        when(jdbcTemplate.queryForObject(anyString(), eq(Integer.class), any(Object[].class))).thenReturn(1);
+        when(jdbcTemplate.update(anyString(), any(Object[].class))).thenReturn(1);
+
+        int restored = service().restoreDocument("a.txt");
+
+        assertEquals(1, restored);
+        ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
+        verify(jdbcTemplate, atLeast(3)).update(sql.capture(), any(Object[].class));
+        assertTrue(sql.getAllValues().stream().anyMatch(value -> value.contains("deleted_prev_status")));
+        assertTrue(sql.getAllValues().stream().anyMatch(value -> value.contains("deleted_at = NULL")));
+    }
 }

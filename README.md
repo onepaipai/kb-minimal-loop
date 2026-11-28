@@ -1,6 +1,6 @@
 # kb-minimal-loop —— AI 知识库最小闭环
 
-上传文档（.txt/.pdf/.doc/.docx/.md/.java）→ 结构感知切块（800/150，标题/表格/代码围栏）→ DashScope 向量化 → 存入 Neon Postgres（pgvector）→ 提问时混合检索（向量 + 关键词，RRF 融合，qwen3-rerank 重排）→ DeepSeek 带 `[1][2]` 引用作答（引用先过范围与文本依据两道校验）；另有流式问答（SSE）、Java 单文件代码知识库、四档角色与部门权限、文档审批发布、审计日志、TOTP 双因素、Refresh Token 续期、OIDC 企业登录、异步入库、健康检查。
+上传文档（.txt/.pdf/.doc/.docx/.md/.java）→ 结构感知切块（800/150，标题/表格/代码围栏）→ DashScope 向量化 → 存入 Neon Postgres（pgvector）→ 提问时混合检索（向量 + 关键词，RRF 融合，qwen3-rerank 重排）→ DeepSeek 带 `[1][2]` 引用作答（引用先过范围与文本依据两道校验）；另有流式问答（SSE）、Java 单文件代码知识库、四档角色与部门权限、文档审批发布、文档回收站、审计日志、TOTP 双因素、Refresh Token 续期、OIDC 企业登录、异步入库、健康检查。
 
 ## 技术栈
 
@@ -27,7 +27,7 @@ curl -X POST http://localhost:8080/api/ask -H "Authorization: Bearer $TOKEN" -H 
 - [架构](docs/architecture.md)——模块划分、数据流、关键决策与已知缺口
 - [接口](docs/api.md)——全部接口、SSE 事件、统一错误体
 - [部署](docs/deployment.md)——Neon、环境变量、启动
-- [验收](docs/acceptance.md)——74 条验收清单
+- [验收](docs/acceptance.md)——76 条验收清单
 
 `docs/samples/` 下为示例文档（请假 / 报销 / 考勤制度），可直接上传验证。前端企业级单页在 `src/main/resources/static/`（`index.html`、`styles.css` 基础布局 + `theme.css` 设计系统覆盖层、`app.js` 主体 + `features.js` / `ui-enhance.js` 功能模块，无构建步骤，样式为 Tabler v1.7.5 的 `tabler.min.css`，支持明暗主题，启动后打开 `http://localhost:8080/`）。
 
@@ -45,7 +45,7 @@ src/main/java/com/example/kb/
 │   ├── IngestController.java          # POST /api/ingest、/api/ingest-async、GET /api/ingest/jobs/{id}
 │   ├── AskController.java             # POST /api/ask、/api/ask-stream
 │   ├── BotController.java             # POST /api/bot/ask（企微/钉钉机器人问答，X-API-Key 鉴权）
-│   ├── DocumentController.java        # GET /api/documents、DELETE /api/document、审批、回滚、版本
+│   ├── DocumentController.java        # 文档清单、回收站、软删除/恢复/永久删除、审批、回滚、版本
 │   ├── KnowledgeEntryController.java  # 在线撰写知识条目入库、清单、详情、更新、删除
 │   ├── FaqController.java             # 置顶标准答案（FAQ）管理
 │   ├── AuthController.java            # POST /api/auth/login、/api/auth/change-password、TOTP 双因素
